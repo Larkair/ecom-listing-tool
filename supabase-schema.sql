@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS ecom_products (
 
 -- 3. 全局设置表
 CREATE TABLE IF NOT EXISTS ecom_settings (
-  id BIGSERIAL PRIMARY KEY DEFAULT 1,
+  id INT PRIMARY KEY DEFAULT 1,
   settings_data JSONB DEFAULT '{}'::jsonb,
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -39,12 +39,25 @@ INSERT INTO ecom_settings (id, settings_data) VALUES (1, '{
   "titleSep": " "
 }'::jsonb) ON CONFLICT (id) DO NOTHING;
 
+-- 4. 配置方案表（用户可保存多个字段配置方案）
+CREATE TABLE IF NOT EXISTS ecom_config_schemes (
+  id BIGSERIAL PRIMARY KEY,
+  platform TEXT NOT NULL,
+  scheme_name TEXT NOT NULL,
+  template_filename TEXT,
+  template_headers JSONB DEFAULT '[]'::jsonb,
+  field_configs JSONB DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- ============================================
 -- RLS 策略：允许 anon 用户读写
 -- ============================================
 ALTER TABLE ecom_configs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ecom_products ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ecom_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ecom_config_schemes ENABLE ROW LEVEL SECURITY;
 
 -- 允许 anon 读取
 CREATE POLICY "Allow anon select on ecom_configs" ON ecom_configs
@@ -84,11 +97,22 @@ CREATE POLICY "Allow anon update on ecom_settings" ON ecom_settings
 CREATE POLICY "Allow anon delete on ecom_settings" ON ecom_settings
   FOR DELETE USING (true);
 
+-- ecom_config_schemes 策略
+CREATE POLICY "Allow anon select on ecom_config_schemes" ON ecom_config_schemes
+  FOR SELECT USING (true);
+CREATE POLICY "Allow anon insert on ecom_config_schemes" ON ecom_config_schemes
+  FOR INSERT WITH CHECK (true);
+CREATE POLICY "Allow anon update on ecom_config_schemes" ON ecom_config_schemes
+  FOR UPDATE USING (true);
+CREATE POLICY "Allow anon delete on ecom_config_schemes" ON ecom_config_schemes
+  FOR DELETE USING (true);
+
 -- ============================================
 -- 索引
 -- ============================================
 CREATE INDEX IF NOT EXISTS idx_ecom_products_platform ON ecom_products(platform);
 CREATE INDEX IF NOT EXISTS idx_ecom_products_sort ON ecom_products(sort_order);
+CREATE INDEX IF NOT EXISTS idx_ecom_config_schemes_platform ON ecom_config_schemes(platform);
 
 -- ============================================
 -- 自动更新 updated_at 的函数
@@ -115,4 +139,9 @@ CREATE TRIGGER update_ecom_products_updated_at
 DROP TRIGGER IF EXISTS update_ecom_settings_updated_at ON ecom_settings;
 CREATE TRIGGER update_ecom_settings_updated_at
     BEFORE UPDATE ON ecom_settings
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_ecom_config_schemes_updated_at ON ecom_config_schemes;
+CREATE TRIGGER update_ecom_config_schemes_updated_at
+    BEFORE UPDATE ON ecom_config_schemes
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();

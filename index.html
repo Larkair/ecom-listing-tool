@@ -284,6 +284,28 @@
                       background: #fdf2f8; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
     .ai-combo-info { background: #ede9fe; border-radius: 6px; padding: 6px 10px; font-size: .78rem; color: #7c3aed; }
 
+    /* 方案列表 */
+    .scheme-list { display: flex; flex-direction: column; gap: 8px; }
+    .scheme-item { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px;
+                   display: flex; align-items: center; gap: 12px; transition: all .15s; }
+    .scheme-item:hover { border-color: var(--pri); box-shadow: 0 0 0 2px rgba(99,102,241,.1); }
+    .scheme-item .sicon { width: 36px; height: 36px; border-radius: 8px; background: var(--pri-l);
+                         display: flex; align-items: center; justify-content: center; flex-shrink: 0; 
+                         color: var(--pri-d); font-size: 1rem; font-weight: 700; }
+    .scheme-item .sinfo { flex: 1; min-width: 0; }
+    .scheme-item .sname { font-weight: 600; font-size: .88rem; }
+    .scheme-item .smeta { font-size: .72rem; color: var(--muted); margin-top: 2px; }
+    .scheme-item .sactions { display: flex; gap: 6px; }
+    .scheme-save-row { display: flex; gap: 8px; margin-bottom: 16px; }
+    .scheme-save-row input { flex: 1; }
+    .no-config-banner { background: #fff7ed; border: 2px solid #f97316; border-radius: var(--radius); padding: 20px; text-align: center; }
+    .no-config-banner h3 { color: #ea580c; margin-bottom: 8px; font-size: 1rem; }
+    .no-config-banner p { color: var(--muted); font-size: .82rem; margin-bottom: 14px; }
+    .scheme-selector .scheme-item { cursor: pointer; }
+    .scheme-selector .scheme-item.selected { border-color: var(--pri); background: var(--pri-l); }
+    .current-scheme-badge { display: inline-flex; align-items: center; gap: 4px; background: #d1fae5; 
+                            color: #059669; font-size: .75rem; padding: 2px 8px; border-radius: 4px; font-weight: 600; }
+
     @media (max-width: 768px) {
       .sidebar { display: none; }
       .form-row.col2, .form-row.col3 { grid-template-columns: 1fr; }
@@ -383,8 +405,9 @@
       <div class="card" id="fieldConfigCard" style="display:none">
         <div class="card-header">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--pri)" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
-          <div><div class="card-title">字段填写方式配置</div><div class="card-sub">为每个字段设置填写方式 + 关联产品信息字段</div></div>
+          <div><div class="card-title">字段填写方式配置</div><div class="card-sub">为每个字段设置填写方式 + 关联产品信息字段</div><span id="currentSchemeBadge" style="display:none"></span></div>
           <div class="ml-auto flex gap8">
+            <button class="btn btn-outline btn-sm" onclick="openSchemeManager()">📋 配置方案</button>
             <button class="btn btn-outline btn-sm" onclick="applyBatchMode()">批量设置</button>
             <button class="btn btn-primary btn-sm" onclick="saveFieldConfig()">保存配置 →</button>
           </div>
@@ -511,6 +534,42 @@
       </div>
     </div>
 
+    <!-- ====== 方案管理弹窗 ====== -->
+    <div class="modal-overlay" id="schemeManagerModal">
+      <div class="modal" style="width:600px">
+        <div class="modal-header">
+          <div class="modal-title">📋 配置方案管理</div>
+          <button class="modal-close" onclick="closeSchemeManager()">×</button>
+        </div>
+        <div class="scheme-save-row">
+          <input class="form-ctrl" id="newSchemeName" placeholder="输入方案名称（如：Shopee服装模板）…" />
+          <button class="btn btn-primary" onclick="saveAsScheme()">💾 另存为方案</button>
+        </div>
+        <div id="schemeListContainer" class="scheme-list" style="max-height:350px;overflow-y:auto">
+          <p class="text-sm text-muted" style="padding:20px;text-align:center">暂无方案</p>
+        </div>
+        <div style="margin-top:16px;text-align:center">
+          <button class="btn btn-outline btn-sm" onclick="closeSchemeManager()">关闭</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ====== 方案选择弹窗（创建产品时） ====== -->
+    <div class="modal-overlay" id="schemeSelectorModal">
+      <div class="modal" style="width:560px">
+        <div class="modal-header">
+          <div class="modal-title">📋 选择配置方案</div>
+          <button class="modal-close" onclick="closeSchemeSelector()">×</button>
+        </div>
+        <p class="text-sm text-muted" style="margin-bottom:12px">请先选择一个字段配置方案，才能开始填写产品信息。</p>
+        <div id="schemeSelectorList" class="scheme-list scheme-selector" style="max-height:300px;overflow-y:auto"></div>
+        <div style="margin-top:16px;display:flex;gap:8px;justify-content:center">
+          <button class="btn btn-outline btn-sm" onclick="closeSchemeSelector()">取消</button>
+          <button class="btn btn-outline btn-sm" onclick="showPage('field-config',document.querySelectorAll('.sidebar-item')[0]);closeSchemeSelector()">去配置字段</button>
+        </div>
+      </div>
+    </div>
+
   </main>
 </div>
 
@@ -620,6 +679,16 @@ async function loadFromSupabase() {
       if (sd.titleSep !== undefined) state.settings.titleSep = sd.titleSep;
     }
 
+    // 加载方案
+    const { data: schemes, error: schErr } = await sb.from('ecom_config_schemes').select('*').order('updated_at', { ascending: false });
+    if (!schErr && schemes) {
+      state.configSchemes = { shopee: [], lazada: [], tiktok: [] };
+      schemes.forEach(s => {
+        if (!state.configSchemes[s.platform]) state.configSchemes[s.platform] = [];
+        state.configSchemes[s.platform].push(s);
+      });
+    }
+
     setSyncStatus('idle');
     return true;
   } catch (e) {
@@ -700,6 +769,8 @@ const state = {
   templates: { shopee: null, lazada: null, tiktok: null },
   fieldConfigs: { shopee: [], lazada: [], tiktok: [] },
   products: { shopee: [], lazada: [], tiktok: [] },
+  configSchemes: { shopee: [], lazada: [], tiktok: [] },
+  currentSchemeName: { shopee: '', lazada: '', tiktok: '' },
   currentProductIdx: -1,
   settings: { maxTitleLen: 120, genCount: 5, titleSep: ' ' }
 };
@@ -732,6 +803,7 @@ function switchPlatform(platform, btn) {
   }
   renderFieldList();
   renderProductList();
+  updateCurrentSchemeBadge();
   showToast(`已切换到 ${names[platform]} 平台`, 'success');
 }
 
@@ -981,6 +1053,183 @@ function doBatchMode(mode, overlay) {
 }
 
 // =============================================
+// 配置方案管理
+// =============================================
+function openSchemeManager() {
+  const fields = state.fieldConfigs[state.platform];
+  if (!fields || fields.length === 0) {
+    showToast('请先导入模板并配置字段', 'warn');
+    return;
+  }
+  document.getElementById('schemeManagerModal').classList.add('open');
+  document.getElementById('newSchemeName').value = '';
+  renderSchemeList();
+}
+
+function closeSchemeManager() {
+  document.getElementById('schemeManagerModal').classList.remove('open');
+}
+
+function renderSchemeList() {
+  const schemes = state.configSchemes[state.platform];
+  const container = document.getElementById('schemeListContainer');
+  if (!schemes || schemes.length === 0) {
+    container.innerHTML = '<p class="text-sm text-muted" style="padding:20px;text-align:center">暂无方案，输入名称后点击「另存为方案」</p>';
+    return;
+  }
+  container.innerHTML = schemes.map((s, i) => {
+    const isCurrent = s.scheme_name === state.currentSchemeName[state.platform];
+    return `
+      <div class="scheme-item">
+        <div class="sicon">${s.scheme_name.charAt(0).toUpperCase()}</div>
+        <div class="sinfo">
+          <div class="sname">${escHtml(s.scheme_name)} ${isCurrent ? '<span class="current-scheme-badge">当前</span>' : ''}</div>
+          <div class="smeta">${(s.field_configs||[]).length} 个字段 · ${s.template_filename||'无模板'} · ${new Date(s.updated_at).toLocaleString('zh-CN')}</div>
+        </div>
+        <div class="sactions">
+          <button class="btn btn-outline btn-sm" onclick="event.stopPropagation();loadSchemeById(${s.id})">应用</button>
+          <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteSchemeById(${s.id})">删除</button>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function saveAsScheme() {
+  const name = document.getElementById('newSchemeName').value.trim();
+  if (!name) { showToast('请输入方案名称', 'warn'); return; }
+  const platform = state.platform;
+  const fields = state.fieldConfigs[platform];
+  const tpl = state.templates[platform];
+
+  const scheme = {
+    platform,
+    scheme_name: name,
+    template_filename: tpl?.filename || null,
+    template_headers: tpl?.data?.[0] || [],
+    field_configs: fields || []
+  };
+
+  try {
+    const { data, error } = await sb.from('ecom_config_schemes').insert(scheme).select('id').single();
+    if (error) throw error;
+    scheme.id = data.id;
+    scheme.created_at = new Date().toISOString();
+    scheme.updated_at = new Date().toISOString();
+    if (!state.configSchemes[platform]) state.configSchemes[platform] = [];
+    state.configSchemes[platform].push(scheme);
+    state.currentSchemeName[platform] = name;
+    updateCurrentSchemeBadge();
+    renderSchemeList();
+    document.getElementById('newSchemeName').value = '';
+    showToast('方案「' + name + '」已保存', 'success');
+  } catch(e) {
+    console.error('Save scheme error:', e);
+    // 降级 localStorage
+    if (!state.configSchemes[platform]) state.configSchemes[platform] = [];
+    scheme.id = Date.now();
+    scheme.created_at = new Date().toISOString();
+    scheme.updated_at = new Date().toISOString();
+    state.configSchemes[platform].push(scheme);
+    state.currentSchemeName[platform] = name;
+    updateCurrentSchemeBadge();
+    renderSchemeList();
+    document.getElementById('newSchemeName').value = '';
+    localStorage.setItem('ecom_schemes_fallback', JSON.stringify(state.configSchemes));
+    showToast('方案已本地保存（云端暂不可用）', 'warn');
+  }
+}
+
+function loadSchemeById(id) {
+  const platform = state.platform;
+  const scheme = state.configSchemes[platform].find(s => s.id === id);
+  if (!scheme) return;
+  state.fieldConfigs[platform] = JSON.parse(JSON.stringify(scheme.field_configs));
+  state.templates[platform] = {
+    filename: scheme.template_filename || '',
+    data: scheme.template_headers?.length ? [scheme.template_headers] : [],
+    fields: scheme.field_configs || []
+  };
+  state.currentSchemeName[platform] = scheme.scheme_name;
+  updateCurrentSchemeBadge();
+  renderFieldList();
+  document.getElementById('fieldConfigCard').style.display = 'block';
+  document.getElementById('uploadZone').style.display = 'none';
+  document.getElementById('importedFileName').textContent = '✓ ' + (scheme.template_filename || '方案模板');
+  closeSchemeManager();
+  showToast('已加载方案「' + scheme.scheme_name + '」', 'success');
+}
+
+async function deleteSchemeById(id) {
+  if (!confirm('确认删除此方案？')) return;
+  const platform = state.platform;
+  const schemes = state.configSchemes[platform];
+  const idx = schemes.findIndex(s => s.id === id);
+  if (idx < 0) return;
+  const name = schemes[idx].scheme_name;
+  try {
+    await sb.from('ecom_config_schemes').delete().eq('id', id);
+  } catch(e) { console.error('Delete scheme error:', e); }
+  schemes.splice(idx, 1);
+  if (state.currentSchemeName[platform] === name) {
+    state.currentSchemeName[platform] = '';
+    updateCurrentSchemeBadge();
+  }
+  renderSchemeList();
+  showToast('方案已删除', 'success');
+}
+
+function updateCurrentSchemeBadge() {
+  const badge = document.getElementById('currentSchemeBadge');
+  const name = state.currentSchemeName[state.platform];
+  if (name) {
+    badge.style.display = 'inline-flex';
+    badge.innerHTML = '📋 ' + escHtml(name);
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+// 方案选择器（创建产品时使用）
+function openSchemeSelector() {
+  const schemes = state.configSchemes[state.platform];
+  const container = document.getElementById('schemeSelectorList');
+  if (!schemes || schemes.length === 0) {
+    container.innerHTML = `
+      <div class="no-config-banner">
+        <h3>⚠ 无可用配置方案</h3>
+        <p>请先在「字段配置」中导入模板并保存为方案</p>
+        <button class="btn btn-primary" onclick="showPage('field-config',document.querySelectorAll('.sidebar-item')[0]);closeSchemeSelector()">去配置字段</button>
+      </div>`;
+  } else {
+    container.innerHTML = schemes.map(s => `
+      <div class="scheme-item" style="cursor:pointer" onclick="selectSchemeAndCreate(${s.id})">
+        <div class="sicon">${s.scheme_name.charAt(0).toUpperCase()}</div>
+        <div class="sinfo">
+          <div class="sname">${escHtml(s.scheme_name)}</div>
+          <div class="smeta">${(s.field_configs||[]).length} 个字段 · ${s.template_filename||'无模板'}</div>
+        </div>
+        <span style="color:var(--pri);font-weight:600;font-size:.8rem">选择 →</span>
+      </div>`).join('');
+  }
+  document.getElementById('schemeSelectorModal').classList.add('open');
+}
+
+function closeSchemeSelector() {
+  document.getElementById('schemeSelectorModal').classList.remove('open');
+}
+
+function selectSchemeAndCreate(id) {
+  loadSchemeById(id);
+  closeSchemeSelector();
+  addNewProduct();
+}
+
+function hasFieldConfig() {
+  const fields = state.fieldConfigs[state.platform];
+  return fields && fields.length > 0;
+}
+
+// =============================================
 // 获取字段关联的内部key
 // =============================================
 function getAssocKey(assoc) {
@@ -991,6 +1240,11 @@ function getAssocKey(assoc) {
 // 产品信息模块
 // =============================================
 function addNewProduct() {
+  // 检查是否有字段配置
+  if (!hasFieldConfig()) {
+    openSchemeSelector();
+    return;
+  }
   const newProduct = {
     id: Date.now(),
     name: '新产品 ' + (state.products[state.platform].length + 1),
@@ -1815,6 +2069,10 @@ async function loadDraft() {
         if (data.settings) state.settings = data.settings;
         showToast('已从本地缓存恢复（云端暂不可用）', 'warn');
       }
+      const schSaved = localStorage.getItem('ecom_schemes_fallback');
+      if (schSaved) {
+        state.configSchemes = JSON.parse(schSaved);
+      }
     } catch(_) {}
   }
   // 恢复当前平台 UI
@@ -1829,6 +2087,7 @@ async function loadDraft() {
   renderFieldList();
   renderProductList();
   updateProductBadge();
+  updateCurrentSchemeBadge();
   if (state.products[state.platform]?.length > 0) {
     state.currentProductIdx = 0;
     renderProductForm(0);
@@ -1852,13 +2111,17 @@ async function clearAllData() {
     await sb.from('ecom_products').delete().neq('platform', '__none__');
     await sb.from('ecom_configs').delete().neq('platform', '__none__');
     await sb.from('ecom_settings').delete().neq('id', 0);
+    await sb.from('ecom_config_schemes').delete().neq('platform', '__none__');
   } catch(e) { console.error('Clear error:', e); }
   state.products = { shopee:[], lazada:[], tiktok:[] };
   state.fieldConfigs = { shopee:[], lazada:[], tiktok:[] };
   state.templates = { shopee:null, lazada:null, tiktok:null };
+  state.configSchemes = { shopee:[], lazada:[], tiktok:[] };
+  state.currentSchemeName = { shopee:'', lazada:'', tiktok:'' };
   state.currentProductIdx = -1;
   localStorage.removeItem('ecom_fallback');
   renderProductList(); renderFieldList(); updateProductBadge();
+  updateCurrentSchemeBadge();
   document.getElementById('uploadZone').style.display = '';
   document.getElementById('fieldConfigCard').style.display = 'none';
   document.getElementById('importedFileName').textContent = '';
