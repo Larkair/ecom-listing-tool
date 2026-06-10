@@ -580,7 +580,7 @@
 // 全局常量
 // =============================================
 const ASSOC_OPTIONS = [
-  '','类目','品牌','Ai标题','描述','产品图片管理',
+  '','类目','品牌','Ai标题','描述','链接图片管理',
   '款式选项','尺码选项','重量','长度','宽度','高度',
   '价格','库存','SKU编码','尺码表图片','面料','风格','领型','版型','机洗'
 ];
@@ -591,7 +591,7 @@ const ASSOC_KEY_MAP = {
   '品牌': '__brand',
   'Ai标题': '__title',
   '描述': '__desc',
-  '产品图片管理': '__images',
+  '链接图片管理': '__images',
   '款式选项': '__styles',
   '尺码选项': '__sizes',
   '重量': '__weight',
@@ -608,6 +608,15 @@ const ASSOC_KEY_MAP = {
   '版型': '__fit',
   '机洗': '__washable'
 };
+
+// 字段配置名称迁移：将旧名称'产品图片管理'统一迁移为'链接图片管理'
+function normalizeFields(fields) {
+  if (!Array.isArray(fields)) return fields;
+  fields.forEach(f => {
+    if (f && f.assoc === '产品图片管理') f.assoc = '链接图片管理';
+  });
+  return fields;
+}
 
 const MAX_IMG_PER_GROUP = 9;
 
@@ -644,7 +653,7 @@ async function loadFromSupabase() {
     if (configs) {
       configs.forEach(c => {
         if (c.field_configs && c.field_configs.length > 0) {
-          state.fieldConfigs[c.platform] = c.field_configs;
+          state.fieldConfigs[c.platform] = normalizeFields(c.field_configs);
         }
         if (c.template_headers && c.template_headers.length > 0) {
           state.templates[c.platform] = {
@@ -949,7 +958,7 @@ function processTemplate(data, filename) {
   })).filter(f => f.name);
 
   state.templates[state.platform] = { filename, data, fields };
-  state.fieldConfigs[state.platform] = fields;
+  state.fieldConfigs[state.platform] = normalizeFields(fields);
 
   document.getElementById('importedFileName').textContent = '✓ ' + filename;
   document.getElementById('uploadZone').style.display = 'none';
@@ -1020,7 +1029,7 @@ function renderFieldExtra(f, i) {
   } else if (f.mode === 'ai') {
     return `<span class="mode-badge" style="background:#ede9fe;color:#7c3aed">🤖 Ai组合标题（关联Ai标题）</span>`;
   } else if (f.mode === 'sku_image') {
-    return `<span class="mode-badge mode-sku">🖼 SKU图（关联产品图片管理，按顺序对应）</span>`;
+    return `<span class="mode-badge mode-sku">🖼 SKU图（关联链接图片管理，按顺序对应）</span>`;
   } else if (f.mode === 'size_chart') {
     return `<span class="mode-badge mode-sizechart">📏 尺码表（关联尺码表图片）</span>`;
   } else if (f.mode === 'auto_seq') {
@@ -1039,9 +1048,9 @@ function onModeChange(idx, mode) {
   if (mode === 'options') f.options = [];
   // 切换为自动排序时，保留起始编码
   if (mode === 'auto_seq' && !f.fixedValue) f.fixedValue = '';
-  // 自动关联 image/sku_image -> 产品图片管理, ai -> Ai标题, size_chart -> 尺码表图片
-  if (mode === 'image' && !f.assoc) { f.assoc = '产品图片管理'; }
-  if (mode === 'sku_image' && !f.assoc) { f.assoc = '产品图片管理'; }
+  // 自动关联 image/sku_image -> 链接图片管理, ai -> Ai标题, size_chart -> 尺码表图片
+  if (mode === 'image' && !f.assoc) { f.assoc = '链接图片管理'; }
+  if (mode === 'sku_image' && !f.assoc) { f.assoc = '链接图片管理'; }
   if (mode === 'ai' && !f.assoc) { f.assoc = 'Ai标题'; }
   if (mode === 'size_chart' && !f.assoc) { f.assoc = '尺码表图片'; }
   document.getElementById('fextra_' + idx).innerHTML = renderFieldExtra(f, idx);
@@ -1223,7 +1232,7 @@ function loadSchemeById(id) {
   const platform = state.platform;
   const scheme = state.configSchemes[platform].find(s => s.id === id);
   if (!scheme) return;
-  state.fieldConfigs[platform] = JSON.parse(JSON.stringify(scheme.field_configs));
+  state.fieldConfigs[platform] = normalizeFields(JSON.parse(JSON.stringify(scheme.field_configs)));
   state.templates[platform] = {
     filename: scheme.template_filename || '',
     data: scheme.template_headers?.length ? [scheme.template_headers] : [],
@@ -1417,7 +1426,7 @@ function renderProductForm(idx) {
 
         <!-- ② 图片管理 -->
         <div id="tab-images" class="tab-pane">
-          <div class="section-title"><div class="num">②</div> 产品图片管理</div>
+          <div class="section-title"><div class="num">②</div> 链接图片管理</div>
 
           <!-- 固定细节图 -->
           <div class="fixed-detail-section">
@@ -1945,7 +1954,7 @@ function buildExportData() {
 
   // 找出图片类字段（按顺序），SKU图字段单独分组
   const imgFields = fields.map((f,i)=>({f,i})).filter(({f})=>
-    f.assoc === '产品图片管理' || f.mode === 'image'
+    f.assoc === '链接图片管理' || f.mode === 'image'
   );
   const skuImgFields = fields.map((f,i)=>({f,i})).filter(({f})=>
     f.mode === 'sku_image'
@@ -2018,8 +2027,8 @@ function buildExportData() {
               return img ? img.dataUrl : '';
             }
 
-            // 图片上传 / 产品图片管理
-            if (f.mode === 'image' || f.assoc === '产品图片管理') {
+            // 图片上传 / 链接图片管理
+            if (f.mode === 'image' || f.assoc === '链接图片管理') {
               const imgFieldIdx = imgFields.findIndex(({i}) => i === fi);
               if (imgFieldIdx < 0) return '';
               const img = allLinkImages[imgFieldIdx];
@@ -2077,7 +2086,7 @@ function buildPreviewData() {
   const imgMap = new Map(); // key: "rowIdx-colIdx" → dataUrl
 
   const imgFields = fields.map((f,i)=>({f,i})).filter(({f})=>
-    f.assoc === '产品图片管理' || f.mode === 'image'
+    f.assoc === '链接图片管理' || f.mode === 'image'
   );
   const skuImgFields = fields.map((f,i)=>({f,i})).filter(({f})=>
     f.mode === 'sku_image'
@@ -2134,7 +2143,7 @@ function buildPreviewData() {
               return '';
             }
 
-            if (f.mode === 'image' || f.assoc === '产品图片管理') {
+            if (f.mode === 'image' || f.assoc === '链接图片管理') {
               const imgFieldIdx = imgFields.findIndex(({i}) => i === fi);
               if (imgFieldIdx < 0) return '';
               const img = allLinkImages[imgFieldIdx];
