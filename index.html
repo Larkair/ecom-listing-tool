@@ -2048,7 +2048,115 @@ function buildExportData() {
 }
 
 // =============================================
-// 导出预览（异步生成缩略图，流畅不卡顿）
+// 轻量预览数据构建（图片不入行数据，用map单独存，避免大数组阻塞）
+// =============================================
+function buildPreviewData() {
+  const fields = state.fieldConfigs[state.platform];
+  const products = state.products[state.platform];
+  const headers = fields.map(f => f.name);
+  const rows = [headers];
+  const imgMap = new Map(); // key: "rowIdx-colIdx" → dataUrl
+
+  const imgFields = fields.map((f,i)=>({f,i})).filter(({f})=>
+    f.assoc === '产品图片管理' || f.mode === 'image'
+  );
+  const skuImgFields = fields.map((f,i)=>({f,i})).filter(({f})=>
+    f.mode === 'sku_image'
+  );
+  const autoSeqFields = fields.map((f,i)=>({f,i})).filter(({f})=> f.mode === 'auto_seq');
+  const sizeChartFields = fields.map((f,i)=>({f,i})).filter(({f})=>
+    f.assoc === '尺码表图片' || f.mode === 'size_chart'
+  );
+
+  const autoSeqCounters = {};
+  autoSeqFields.forEach(({f,i}) => { autoSeqCounters[i] = null; });
+
+  products.forEach(product => {
+    const sizesRaw = (product.fieldValues['__sizes'] || '').split(/[,，]/).map(s=>s.trim()).filter(Boolean);
+    const sizes = sizesRaw.length > 0 ? sizesRaw : [''];
+    const linkCount = Math.max(1, product.images.length);
+    const fixedDetailImgs = product.fixedDetailImages || [];
+
+    autoSeqFields.forEach(({f,i}) => {
+      autoSeqCounters[i] = product.startCode || f.fixedValue || '';
+    });
+
+    const titlesForLinks = [];
+    for (let li = 0; li < linkCount; li++) {
+      titlesForLinks.push(product.generatedTitles[li] || product.generatedTitles[0] || product.selectedTitle || '');
+    }
+
+    for (let li = 0; li < linkCount; li++) {
+      const linkTitle = titlesForLinks[li];
+      const linkImages = product.images[li] ? product.images[li].files : [];
+      const allLinkImages = [...linkImages, ...fixedDetailImgs];
+      const styleCount = Math.max(1, linkImages.length);
+      const styles = [];
+      for (let si = 0; si < styleCount; si++) { styles.push(styleLabel(si)); }
+
+      styles.forEach((style, styleIdx) => {
+        for (const size of sizes) {
+          const rowIdx = rows.length; // 当前行在rows中的索引
+          const row = fields.map((f, fi) => {
+            if (f.mode === 'empty') return '';
+            if (f.mode === 'auto_seq') {
+              const code = autoSeqCounters[fi];
+              autoSeqCounters[fi] = autoIncrementCode(autoSeqCounters[fi]);
+              return code;
+            }
+            if (f.mode === 'fixed') return f.fixedValue || '';
+
+            if (f.mode === 'sku_image') {
+              const img = linkImages[styleIdx];
+              if (img && img.dataUrl) {
+                imgMap.set(`${rowIdx}-${fi}`, img.dataUrl);
+                return '[图片]';
+              }
+              return '';
+            }
+
+            if (f.mode === 'image' || f.assoc === '产品图片管理') {
+              const imgFieldIdx = imgFields.findIndex(({i}) => i === fi);
+              if (imgFieldIdx < 0) return '';
+              const img = allLinkImages[imgFieldIdx];
+              if (img && img.dataUrl) {
+                imgMap.set(`${rowIdx}-${fi}`, img.dataUrl);
+                return '[图片]';
+              }
+              return '';
+            }
+
+            if (f.assoc === '尺码表图片' || f.mode === 'size_chart') {
+              if (product.sizeChart) {
+                imgMap.set(`${rowIdx}-${fi}`, product.sizeChart);
+                return '[图片]';
+              }
+              return '';
+            }
+
+            if (f.assoc === 'Ai标题' || f.mode === 'ai') return linkTitle;
+            if (f.assoc === '款式选项') return style;
+            if (f.assoc === '尺码选项') return size;
+
+            const internalKey = getAssocKey(f.assoc);
+            if (internalKey && FIXED_FIELDS.has(f.assoc)) {
+              if (f.mode === 'fixed') return f.fixedValue || '';
+              return product.fieldValues[internalKey] || '';
+            }
+            if (internalKey) return product.fieldValues[internalKey] || '';
+            return product.fieldValues[f.name] || '';
+          });
+          rows.push(row);
+        }
+      });
+    }
+  });
+
+  return { rows, imgMap };
+}
+
+// =============================================
+// 导出预览（先渲染文本表格，再逐批加载缩略图，流畅不卡）
 // =============================================
 async function refreshPreview() {
   const fields = state.fieldConfigs[state.platform];
@@ -2060,85 +2168,133 @@ async function refreshPreview() {
     return;
   }
   container.innerHTML = '<div class="empty-state" style="padding:20px"><p>⏳ 正在生成预览…</p></div>';
-  // setTimeout 让 loading 先渲染
   await new Promise(r => setTimeout(r, 30));
-  
-  const rows = buildExportData();
-  const totalLinks = products.reduce((s,p) => s + Math.max(1, p.images.length), 0);
-  document.getElementById('previewInfo').textContent = `共 ${products.length} 个产品，${totalLinks} 个链接，${rows.length-1} 行数据，${rows[0].length} 列`;
-  
-  // 收集所有图片单元格位置，并行压缩为微缩略图（40×40, JPEG 0.25）
-  const imgTasks = [];
-  rows.slice(1).forEach((row, ri) => {
-    row.forEach((cell, ci) => {
-      if (typeof cell === 'string' && cell.startsWith('data:image')) {
-        imgTasks.push((async () => {
-          const thumb = await compressImage(cell, 48, 48, 0.2);
-          rows[ri + 1][ci] = thumb;
-        })());
-      }
+
+  try {
+    // 轻量构建：图片不入行数据，用 Map 单独存
+    const { rows, imgMap } = buildPreviewData();
+    const totalLinks = products.reduce((s,p) => s + Math.max(1, p.images.length), 0);
+    document.getElementById('previewInfo').textContent = `共 ${products.length} 个产品，${totalLinks} 个链接，${rows.length-1} 行数据，${rows[0].length} 列`;
+
+    // 立即渲染文本表格（不含图片，飞快）
+    const table = document.createElement('table');
+    const thead = document.createElement('thead');
+    const hr = document.createElement('tr');
+    rows[0].forEach(h => { const th = document.createElement('th'); th.textContent = h; hr.appendChild(th); });
+    thead.appendChild(hr); table.appendChild(thead);
+    const tbody = document.createElement('tbody');
+
+    // 收集图片单元格的 DOM 引用
+    const imgCells = []; // [{td, dataUrl}]
+    rows.slice(1).forEach((row, ri) => {
+      const tr = document.createElement('tr');
+      row.forEach((cell, ci) => {
+        const td = document.createElement('td');
+        const key = `${ri + 1}-${ci}`;
+        if (imgMap.has(key)) {
+          td.textContent = '⏳';
+          td.style.textAlign = 'center';
+          imgCells.push({ td, dataUrl: imgMap.get(key) });
+        } else {
+          td.textContent = cell;
+        }
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
     });
-  });
-  if (imgTasks.length > 0) await Promise.all(imgTasks);
-  
-  // 渲染表格
-  const table = document.createElement('table');
-  const thead = document.createElement('thead');
-  const hr = document.createElement('tr');
-  rows[0].forEach(h => { const th = document.createElement('th'); th.textContent = h; hr.appendChild(th); });
-  thead.appendChild(hr); table.appendChild(thead);
-  const tbody = document.createElement('tbody');
-  rows.slice(1).forEach(row => {
-    const tr = document.createElement('tr');
-    row.forEach(cell => {
-      const td = document.createElement('td');
-      if (typeof cell === 'string' && cell.startsWith('data:image')) {
-        const img = document.createElement('img');
-        img.src = cell; img.style.cssText = 'width:40px;height:40px;object-fit:cover;border-radius:4px;';
-        td.appendChild(img);
-      } else {
-        td.textContent = cell;
+    table.appendChild(tbody);
+    container.innerHTML = '';
+    container.appendChild(table);
+
+    // 逐批加载缩略图（每批10个，不阻塞UI）
+    const BATCH_SIZE = 10;
+    for (let i = 0; i < imgCells.length; i += BATCH_SIZE) {
+      const batch = imgCells.slice(i, i + BATCH_SIZE);
+      await Promise.all(batch.map(async (cell) => {
+        try {
+          const thumb = await compressImage(cell.dataUrl, 48, 48, 0.2);
+          const img = document.createElement('img');
+          img.src = thumb;
+          img.style.cssText = 'width:32px;height:32px;object-fit:cover;border-radius:3px;vertical-align:middle;';
+          cell.td.textContent = '';
+          cell.td.appendChild(img);
+        } catch(e) {
+          cell.td.textContent = '⚠';
+          cell.td.title = '图片加载失败';
+        }
+      }));
+      // 每批之间让浏览器喘口气
+      if (i + BATCH_SIZE < imgCells.length) {
+        await new Promise(r => setTimeout(r, 0));
       }
-      tr.appendChild(td);
-    });
-    tbody.appendChild(tr);
-  });
-  table.appendChild(tbody);
-  container.innerHTML = ''; container.appendChild(table);
+    }
+  } catch(e) {
+    console.error('Preview error:', e);
+    container.innerHTML = `<div class="empty-state" style="padding:40px"><p style="color:var(--danger)">预览生成失败：${e.message || '未知错误'}</p><p style="margin-top:8px">请检查数据正确性后重试</p></div>`;
+  }
 }
 
 // =============================================
-// 导出 Excel（图片压缩 + 错误处理）
+// 导出 Excel（全面错误处理 + 分批压缩）
 // =============================================
 async function exportExcel() {
-  const fields = state.fieldConfigs[state.platform];
-  const products = state.products[state.platform];
-  if (!fields?.length) { showToast('请先导入并配置字段', 'warn'); return; }
-  if (!products.length) { showToast('请先添加产品信息', 'warn'); return; }
-  
-  // 检查 XLSX 库是否可用
-  if (typeof XLSX === 'undefined') {
-    showToast('Excel 组件加载失败，请刷新页面后重试', 'error');
-    return;
-  }
-  
-  showToast('正在生成导出数据…', 'info');
-  const rows = buildExportData();
-  
-  // 后台压缩图片单元格（120×120, JPEG 0.5），避免 XLSX 写入卡死
-  const imgCells = [];
-  rows.slice(1).forEach((row, ri) => {
-    row.forEach((cell, ci) => {
-      if (typeof cell === 'string' && cell.startsWith('data:image')) {
-        imgCells.push((async () => {
-          rows[ri + 1][ci] = await compressImage(cell, 120, 120, 0.5);
-        })());
-      }
-    });
-  });
-  if (imgCells.length > 0) await Promise.all(imgCells);
-  
+  // 防重复点击
+  const btn = document.querySelector('#page-export-preview .btn-success');
+  if (btn) { btn.disabled = true; btn.textContent = '导出中...'; }
+
   try {
+    const fields = state.fieldConfigs[state.platform];
+    const products = state.products[state.platform];
+    if (!fields?.length) { showToast('请先导入并配置字段', 'warn'); return; }
+    if (!products.length) { showToast('请先添加产品信息', 'warn'); return; }
+    
+    if (typeof XLSX === 'undefined') {
+      showToast('Excel 组件加载失败，请刷新页面后重试', 'error');
+      return;
+    }
+    
+    showToast('正在生成导出数据…', 'info');
+    
+    // 构建数据
+    let rows;
+    try {
+      rows = buildExportData();
+    } catch(e) {
+      console.error('buildExportData error:', e);
+      showToast('数据构建失败：' + (e.message || '未知错误'), 'error');
+      return;
+    }
+    
+    showToast(`正在处理 ${rows.length - 1} 行数据…`, 'info');
+    
+    // 分批压缩图片（每批20个，避免同时创建过多Image对象导致OOM）
+    const imgCells = [];
+    rows.slice(1).forEach((row, ri) => {
+      row.forEach((cell, ci) => {
+        if (typeof cell === 'string' && cell.startsWith('data:image')) {
+          imgCells.push({ ri: ri + 1, ci });
+        }
+      });
+    });
+    
+    const BATCH = 20;
+    for (let i = 0; i < imgCells.length; i += BATCH) {
+      const batch = imgCells.slice(i, i + BATCH);
+      await Promise.all(batch.map(async ({ri, ci}) => {
+        try {
+          rows[ri][ci] = await compressImage(rows[ri][ci], 120, 120, 0.5);
+        } catch(e) {
+          rows[ri][ci] = ''; // 压缩失败，清空该格
+        }
+      }));
+      // 每批之间让浏览器响应
+      if (i + BATCH < imgCells.length) {
+        await new Promise(r => setTimeout(r, 0));
+      }
+    }
+    
+    showToast('正在生成 Excel 文件…', 'info');
+    
     const ws = XLSX.utils.aoa_to_sheet(rows);
     ws['!cols'] = rows[0].map(() => ({ wch: 22 }));
     const wb = XLSX.utils.book_new();
@@ -2146,6 +2302,7 @@ async function exportExcel() {
     XLSX.utils.book_append_sheet(wb, ws, pNames[state.platform] || 'Sheet1');
     const filename = `${pNames[state.platform]}_批量上架_${new Date().toLocaleDateString('zh-CN').replace(/\//g,'-')}.xlsx`;
     XLSX.writeFile(wb, filename);
+    
     const steps = document.querySelectorAll('.step');
     steps[3].classList.add('done');
     document.getElementById('stepLine3').classList.add('done');
@@ -2153,6 +2310,8 @@ async function exportExcel() {
   } catch(e) {
     console.error('Export error:', e);
     showToast('导出失败：' + (e.message || '未知错误'), 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '导出 Excel'; }
   }
 }
 
