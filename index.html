@@ -4,8 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>跨境电商批量上架工具</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"
+    onerror="var s=document.createElement('script');s.src='https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js';document.head.appendChild(s);"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"
+    onerror="var s=document.createElement('script');s.src='https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.min.js';document.head.appendChild(s);"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
@@ -610,11 +612,16 @@ const ASSOC_KEY_MAP = {
 const MAX_IMG_PER_GROUP = 9;
 
 // =============================================
-// Supabase 初始化
+// Supabase 初始化（容错：CDN 加载失败不影响核心功能）
 // =============================================
 const SUPABASE_URL = 'https://khrppyhcjzkkokyhnhhd.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtocnBweWhjanpra29reWhuaGhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwNzY1NDEsImV4cCI6MjA5NjY1MjU0MX0.uS9YablBNwjUmQlwRbLRw3SEPNgEnO1Uc6Poe1SeB88';
-const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+let sb = null;
+try {
+  if (typeof supabase !== 'undefined' && supabase.createClient) {
+    sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  }
+} catch(e) { console.warn('Supabase init failed:', e); }
 let syncTimer = null;
 let syncStatus = 'idle'; // idle | syncing | error
 
@@ -622,13 +629,14 @@ function setSyncStatus(s) {
   syncStatus = s;
   const el = document.getElementById('syncStatus');
   if (!el) return;
-  const map = { idle:'💾 已同步', syncing:'⏳ 同步中…', error:'⚠️ 同步失败' };
+  const map = { idle:'💾 已同步', syncing:'⏳ 同步中…', error:'⚠️ 同步失败', offline:'🔌 离线模式' };
   el.textContent = map[s] || map.idle;
-  el.style.color = s === 'error' ? 'var(--danger)' : s === 'syncing' ? 'var(--warn)' : 'var(--muted)';
+  el.style.color = s === 'error' ? 'var(--danger)' : s === 'syncing' ? 'var(--warn)' : s === 'offline' ? 'var(--sec)' : 'var(--muted)';
 }
 
 // 从 Supabase 加载所有数据
 async function loadFromSupabase() {
+  if (!sb) { setSyncStatus('offline'); return false; }
   try {
     // 加载配置
     const { data: configs, error: cfgErr } = await sb.from('ecom_configs').select('*');
@@ -700,6 +708,14 @@ async function loadFromSupabase() {
 
 // 保存到 Supabase（带防抖）
 async function syncToSupabase() {
+  if (!sb) {
+    setSyncStatus('offline');
+    // 离线模式下也保存到 localStorage
+    try { localStorage.setItem('ecom_fallback', JSON.stringify({
+      fieldConfigs: state.fieldConfigs, products: state.products, settings: state.settings
+    })); } catch(_) {}
+    return;
+  }
   setSyncStatus('syncing');
   try {
     const platform = state.platform;
@@ -823,11 +839,19 @@ function showPage(page, el) {
 // =============================================
 function handleTemplateImport(input) {
   const file = input.files[0];
-  if (!file) return;
+  if (!file) { console.log('No file selected'); return; }
+  console.log('Processing file:', file.name, file.size);
+  // 检查 XLSX 库
+  if (typeof XLSX === 'undefined') {
+    showToast('XLSX 库加载失败，请刷新页面后重试', 'error');
+    return;
+  }
   const reader = new FileReader();
+  reader.onerror = () => { showToast('文件读取失败', 'error'); };
   reader.onload = (e) => {
     try {
       let data;
+      console.log('File loaded, parsing...');
       if (file.name.toLowerCase().endsWith('.csv')) {
         const text = new TextDecoder('utf-8').decode(e.target.result);
         const wb = XLSX.read(text, { type: 'string' });
@@ -836,8 +860,12 @@ function handleTemplateImport(input) {
         const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
         data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1 });
       }
+      console.log('Parsed', data?.length, 'rows');
       processTemplate(data, file.name);
-    } catch (err) { showToast('文件解析失败：' + err.message, 'error'); }
+    } catch (err) {
+      console.error('Parse error:', err);
+      showToast('文件解析失败：' + (err.message || err), 'error');
+    }
   };
   reader.readAsArrayBuffer(file);
 }
@@ -2161,6 +2189,7 @@ function importConfig(input) {
 // =============================================
 function showToast(msg, type = 'info') {
   const container = document.getElementById('toastContainer');
+  if (!container) { console.warn('[Toast]', msg); return; }
   const icons = { success:'✓', error:'✕', warn:'⚠', info:'ℹ' };
   const toast = document.createElement('div');
   toast.className = 'toast ' + type;
@@ -2181,14 +2210,14 @@ function escHtml(str) {
 // =============================================
 document.addEventListener('DOMContentLoaded', async () => {
   // 显示加载状态
-  showToast('正在从云端加载数据…', 'info');
+  showToast(sb ? '正在从云端加载数据…' : '云端未连接，使用离线模式', 'info');
   await loadDraft();
   document.querySelectorAll('.toast').forEach(t => t.remove());
   document.getElementById('uploadZone').addEventListener('click', () => {
     document.getElementById('templateFile').click();
   });
   // 设置初始同步状态
-  setSyncStatus('idle');
+  setSyncStatus(sb ? 'idle' : 'offline');
 });
 </script>
 </body>
