@@ -145,3 +145,25 @@ DROP TRIGGER IF EXISTS update_ecom_config_schemes_updated_at ON ecom_config_sche
 CREATE TRIGGER update_ecom_config_schemes_updated_at
     BEFORE UPDATE ON ecom_config_schemes
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- ============================================
+-- Supabase Storage 图床（产品图片转存为URL）
+-- 请在 Supabase SQL Editor 运行以下语句来创建 Storage Bucket
+-- 注意：Storage Bucket 无法通过纯 SQL 完整创建，请同时前往
+--   Supabase Dashboard → Storage → Create Bucket
+--   创建名为 "product-images" 的 Public Bucket
+-- ============================================
+
+-- 以下策略允许 anon 用户访问 product-images bucket 中的对象
+-- （在 Supabase Dashboard → Storage → Policies 中配置）
+
+-- 1. 前往 Storage，创建 bucket：
+--    - Name: product-images
+--    - Public bucket: ✅ 勾选
+--    - File size limit: 50MB
+--
+-- 2. 为该 bucket 添加 RLS 策略（允许 anon 完整访问）：
+--    SELECT:  USING expression = (bucket_id = 'product-images')
+--    INSERT:  WITH CHECK expression = (bucket_id = 'product-images')
+--    UPDATE:  USING expression = (bucket_id = 'product-images')
+--    DELETE:  USING expression = (bucket_id = 'product-images')

@@ -811,6 +811,25 @@ async function compressImageList(list, maxW, maxH, quality) {
 }
 
 // =============================================
+// 图床上传：将 dataUrl 上传到 Supabase Storage，返回公开访问 URL
+// =============================================
+async function uploadImageToStorage(dataUrl, filename) {
+  if (!sb) return null;
+  try {
+    const res = await fetch(dataUrl);
+    const blob = await res.blob();
+    const ext = (filename || 'image.jpg').split('.').pop() || 'jpg';
+    const filePath = `products/${Date.now()}_${Math.random().toString(36).substring(2, 10)}.${ext}`;
+    const { data, error } = await sb.storage
+      .from('product-images')
+      .upload(filePath, blob, { contentType: blob.type || 'image/jpeg', upsert: false });
+    if (error) { console.error('图床上传失败:', error); return null; }
+    const { data: urlData } = sb.storage.from('product-images').getPublicUrl(data.path);
+    return urlData.publicUrl;
+  } catch(e) { console.error('图床上传异常:', e); return null; }
+}
+
+// =============================================
 // 全局状态
 // =============================================
 const state = {
@@ -2167,34 +2186,26 @@ async function refreshPreview() {
     document.getElementById('previewInfo').textContent = '共 0 个产品';
     return;
   }
-  container.innerHTML = '<div class="empty-state" style="padding:20px"><p>⏳ 正在生成预览…</p></div>';
-  await new Promise(r => setTimeout(r, 30));
-
   try {
-    // 轻量构建：图片不入行数据，用 Map 单独存
-    const { rows, imgMap } = buildPreviewData();
+    container.innerHTML = '<div class="empty-state" style="padding:20px"><p>⏳ 正在生成预览…</p></div>';
+    await new Promise(r => setTimeout(r, 30));
+    const rows = buildExportData();
     const totalLinks = products.reduce((s,p) => s + Math.max(1, p.images.length), 0);
-    document.getElementById('previewInfo').textContent = `共 ${products.length} 个产品，${totalLinks} 个链接，${rows.length-1} 行数据，${rows[0].length} 列`;
-
-    // 立即渲染文本表格（不含图片，飞快）
+    document.getElementById('previewInfo').textContent = '共 ' + products.length + ' 个产品，' + totalLinks + ' 个链接，' + (rows.length-1) + ' 行数据，' + rows[0].length + ' 列';
+    // 纯文本渲染，图片单元格只显示 [图片]，不渲染缩略图，百款产品秒开
     const table = document.createElement('table');
     const thead = document.createElement('thead');
     const hr = document.createElement('tr');
     rows[0].forEach(h => { const th = document.createElement('th'); th.textContent = h; hr.appendChild(th); });
     thead.appendChild(hr); table.appendChild(thead);
     const tbody = document.createElement('tbody');
-
-    // 收集图片单元格的 DOM 引用
-    const imgCells = []; // [{td, dataUrl}]
-    rows.slice(1).forEach((row, ri) => {
+    rows.slice(1).forEach(row => {
       const tr = document.createElement('tr');
-      row.forEach((cell, ci) => {
+      row.forEach(cell => {
         const td = document.createElement('td');
-        const key = `${ri + 1}-${ci}`;
-        if (imgMap.has(key)) {
-          td.textContent = '⏳';
-          td.style.textAlign = 'center';
-          imgCells.push({ td, dataUrl: imgMap.get(key) });
+        if (typeof cell === 'string' && cell.startsWith('data:image')) {
+          td.textContent = '[图片]';
+          td.style.cssText = 'color:var(--muted);font-size:.75rem;text-align:center;';
         } else {
           td.textContent = cell;
         }
@@ -2205,32 +2216,9 @@ async function refreshPreview() {
     table.appendChild(tbody);
     container.innerHTML = '';
     container.appendChild(table);
-
-    // 逐批加载缩略图（每批10个，不阻塞UI）
-    const BATCH_SIZE = 10;
-    for (let i = 0; i < imgCells.length; i += BATCH_SIZE) {
-      const batch = imgCells.slice(i, i + BATCH_SIZE);
-      await Promise.all(batch.map(async (cell) => {
-        try {
-          const thumb = await compressImage(cell.dataUrl, 48, 48, 0.2);
-          const img = document.createElement('img');
-          img.src = thumb;
-          img.style.cssText = 'width:32px;height:32px;object-fit:cover;border-radius:3px;vertical-align:middle;';
-          cell.td.textContent = '';
-          cell.td.appendChild(img);
-        } catch(e) {
-          cell.td.textContent = '⚠';
-          cell.td.title = '图片加载失败';
-        }
-      }));
-      // 每批之间让浏览器喘口气
-      if (i + BATCH_SIZE < imgCells.length) {
-        await new Promise(r => setTimeout(r, 0));
-      }
-    }
   } catch(e) {
     console.error('Preview error:', e);
-    container.innerHTML = `<div class="empty-state" style="padding:40px"><p style="color:var(--danger)">预览生成失败：${e.message || '未知错误'}</p><p style="margin-top:8px">请检查数据正确性后重试</p></div>`;
+    container.innerHTML = '<div class="empty-state" style="padding:40px"><p style="color:var(--danger)">预览生成失败：' + (e.message || '未知错误') + '</p></div>';
   }
 }
 
@@ -2238,75 +2226,61 @@ async function refreshPreview() {
 // 导出 Excel（全面错误处理 + 分批压缩）
 // =============================================
 async function exportExcel() {
-  // 防重复点击
   const btn = document.querySelector('#page-export-preview .btn-success');
   if (btn) { btn.disabled = true; btn.textContent = '导出中...'; }
-
   try {
     const fields = state.fieldConfigs[state.platform];
     const products = state.products[state.platform];
     if (!fields?.length) { showToast('请先导入并配置字段', 'warn'); return; }
     if (!products.length) { showToast('请先添加产品信息', 'warn'); return; }
-    
-    if (typeof XLSX === 'undefined') {
-      showToast('Excel 组件加载失败，请刷新页面后重试', 'error');
-      return;
-    }
-    
+    if (typeof XLSX === 'undefined') { showToast('Excel 组件加载失败，请刷新页面', 'error'); return; }
+
     showToast('正在生成导出数据…', 'info');
-    
-    // 构建数据
-    let rows;
-    try {
-      rows = buildExportData();
-    } catch(e) {
-      console.error('buildExportData error:', e);
-      showToast('数据构建失败：' + (e.message || '未知错误'), 'error');
-      return;
-    }
-    
-    showToast(`正在处理 ${rows.length - 1} 行数据…`, 'info');
-    
-    // 分批压缩图片（每批20个，避免同时创建过多Image对象导致OOM）
-    const imgCells = [];
+    const rows = buildExportData();
+
+    var imgCells = [];
     rows.slice(1).forEach((row, ri) => {
       row.forEach((cell, ci) => {
         if (typeof cell === 'string' && cell.startsWith('data:image')) {
-          imgCells.push({ ri: ri + 1, ci });
+          imgCells.push({ ri: ri + 1, ci: ci, dataUrl: cell, filename: 'img_' + (ri+1) + '_' + ci + '.jpg' });
         }
       });
     });
-    
-    const BATCH = 20;
-    for (let i = 0; i < imgCells.length; i += BATCH) {
-      const batch = imgCells.slice(i, i + BATCH);
-      await Promise.all(batch.map(async ({ri, ci}) => {
-        try {
-          rows[ri][ci] = await compressImage(rows[ri][ci], 120, 120, 0.5);
-        } catch(e) {
-          rows[ri][ci] = ''; // 压缩失败，清空该格
-        }
-      }));
-      // 每批之间让浏览器响应
-      if (i + BATCH < imgCells.length) {
-        await new Promise(r => setTimeout(r, 0));
+
+    if (imgCells.length > 0) {
+      if (!sb) {
+        showToast('图床未连接，请先在 Supabase Dashboard 创建 product-images Bucket（详见 supabase-schema.sql）', 'error');
+        return;
+      }
+      showToast('正在上传 ' + imgCells.length + ' 张图片到图床，请稍候…', 'info');
+      var BATCH = 10;
+      var uploaded = 0;
+      for (var i = 0; i < imgCells.length; i += BATCH) {
+        var batch = imgCells.slice(i, i + BATCH);
+        var results = await Promise.all(batch.map(function(item) {
+          return uploadImageToStorage(item.dataUrl, item.filename).then(function(url) {
+            return { ri: item.ri, ci: item.ci, url: url };
+          });
+        }));
+        results.forEach(function(r) { rows[r.ri][r.ci] = r.url || '[上传失败]'; });
+        uploaded += batch.length;
+        showToast('图片上传中… (' + uploaded + '/' + imgCells.length + ')', 'info');
       }
     }
-    
+
     showToast('正在生成 Excel 文件…', 'info');
-    
-    const ws = XLSX.utils.aoa_to_sheet(rows);
-    ws['!cols'] = rows[0].map(() => ({ wch: 22 }));
-    const wb = XLSX.utils.book_new();
-    const pNames = { shopee:'Shopee', lazada:'Lazada', tiktok:'TikTok' };
+    var ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = rows[0].map(function() { return { wch: 22 }; });
+    var wb = XLSX.utils.book_new();
+    var pNames = { shopee:'Shopee', lazada:'Lazada', tiktok:'TikTok' };
     XLSX.utils.book_append_sheet(wb, ws, pNames[state.platform] || 'Sheet1');
-    const filename = `${pNames[state.platform]}_批量上架_${new Date().toLocaleDateString('zh-CN').replace(/\//g,'-')}.xlsx`;
+    var timestamp = new Date().toLocaleDateString('zh-CN').replace(/\//g,'-');
+    var filename = pNames[state.platform] + '_批量上架_' + timestamp + '.xlsx';
     XLSX.writeFile(wb, filename);
-    
-    const steps = document.querySelectorAll('.step');
+    var steps = document.querySelectorAll('.step');
     steps[3].classList.add('done');
     document.getElementById('stepLine3').classList.add('done');
-    showToast(`导出成功：${filename}`, 'success');
+    showToast('导出成功：' + filename, 'success');
   } catch(e) {
     console.error('Export error:', e);
     showToast('导出失败：' + (e.message || '未知错误'), 'error');
