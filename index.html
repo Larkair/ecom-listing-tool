@@ -828,14 +828,16 @@ async function uploadImageToStorage(dataUrl, filename) {
     const res = await fetch(dataUrl);
     const blob = await res.blob();
     const ext = (filename || 'image.jpg').split('.').pop() || 'jpg';
-    const filePath = `products/${Date.now()}_${Math.random().toString(36).substring(2, 10)}.${ext}`;
+    const mime = blob.type || 'image/jpeg';
+    const filePath = 'products/' + Date.now() + '_' + Math.random().toString(36).substring(2, 10) + '.' + ext;
     const { data, error } = await sb.storage
       .from('product-images')
-      .upload(filePath, blob, { contentType: blob.type || 'image/jpeg', upsert: false });
-    if (error) { console.error('图床上传失败:', error); return null; }
+      .upload(filePath, blob, { contentType: mime, upsert: false });
+    if (error) { console.warn('图床上传失败(可能Bucket未创建):', error.message || error); return null; }
+    if (!data || !data.path) { console.warn('图床上传返回无path'); return null; }
     const { data: urlData } = sb.storage.from('product-images').getPublicUrl(data.path);
-    return urlData.publicUrl;
-  } catch(e) { console.error('图床上传异常:', e); return null; }
+    return urlData && urlData.publicUrl ? urlData.publicUrl : null;
+  } catch(e) { console.warn('图床上传异常:', e.message || e); return null; }
 }
 
 // =============================================
@@ -1950,328 +1952,313 @@ function buildExportData() {
   const fields = state.fieldConfigs[state.platform];
   const products = state.products[state.platform];
   const headers = fields.map(f => f.name);
-  const colCount = fields.length;
-  let rows = [headers];
+  var colCount = fields.length;
+  var rows = [headers];
 
   // 找出图片类字段（按顺序），SKU图字段单独分组
-  const imgFields = fields.map((f,i)=>({f,i})).filter(({f})=>
-    f.assoc === '链接图片管理' || f.mode === 'image'
-  );
-  const skuImgFields = fields.map((f,i)=>({f,i})).filter(({f})=>
-    f.mode === 'sku_image'
-  );
-  // 自动排序字段
-  const autoSeqFields = fields.map((f,i)=>({f,i})).filter(({f})=> f.mode === 'auto_seq');
-  // 尺码表字段
-  const sizeChartFields = fields.map((f,i)=>({f,i})).filter(({f})=>
-    f.assoc === '尺码表图片' || f.mode === 'size_chart'
-  );
-
-  // 全局自动排序计数器
-  const autoSeqCounters = {};
-  autoSeqFields.forEach(({f,i}) => {
-    autoSeqCounters[i] = null;
+  var imgFields = fields.map(function(f,i){ return {f:f, i:i}; }).filter(function(item){
+    return item.f.assoc === '链接图片管理' || item.f.mode === 'image';
+  });
+  var skuImgFields = fields.map(function(f,i){ return {f:f, i:i}; }).filter(function(item){
+    return item.f.mode === 'sku_image';
+  });
+  var autoSeqFields = fields.map(function(f,i){ return {f:f, i:i}; }).filter(function(item){ return item.f.mode === 'auto_seq'; });
+  var sizeChartFields = fields.map(function(f,i){ return {f:f, i:i}; }).filter(function(item){
+    return item.f.assoc === '尺码表图片' || item.f.mode === 'size_chart';
   });
 
-  products.forEach(product => {
-    // 解析尺码选项
-    const sizesRaw = (product.fieldValues['__sizes'] || '').split(/[,，]/).map(s=>s.trim()).filter(Boolean);
-    const sizes = sizesRaw.length > 0 ? sizesRaw : [''];
+  var autoSeqCounters = {};
+  autoSeqFields.forEach(function(item){ autoSeqCounters[item.i] = null; });
 
-    // 链接数 = 图片组数，至少1
-    const linkCount = Math.max(1, product.images.length);
-    const fixedDetailImgs = product.fixedDetailImages || [];
+  // 跨链接 row 索引追踪 (用于预览)
+  var linkStarts = []; // { dataRowIdx (在最终rows中的索引), title, firstImageDataUrl }
 
-    // 初始化自动排序计数器
-    autoSeqFields.forEach(({f,i}) => {
-      autoSeqCounters[i] = product.startCode || f.fixedValue || '';
+  products.forEach(function(product) {
+    var sizesRaw = (product.fieldValues['__sizes'] || '').split(/[,，]/).map(function(s){ return s.trim(); }).filter(Boolean);
+    var sizes = sizesRaw.length > 0 ? sizesRaw : [''];
+    var linkCount = Math.max(1, product.images.length);
+    var fixedDetailImgs = product.fixedDetailImages || [];
+
+    autoSeqFields.forEach(function(item){
+      autoSeqCounters[item.i] = product.startCode || item.f.fixedValue || '';
     });
 
-    // 为每个链接分配标题
-    const titlesForLinks = [];
-    for (let li = 0; li < linkCount; li++) {
+    var titlesForLinks = [];
+    for (var li = 0; li < linkCount; li++) {
       titlesForLinks.push(product.generatedTitles[li] || product.generatedTitles[0] || product.selectedTitle || '');
     }
 
-    for (let li = 0; li < linkCount; li++) {
-      const linkTitle = titlesForLinks[li];
-      const linkImages = product.images[li] ? product.images[li].files : [];
-      // 链接完整图片列表 = 自有图片 + 固定细节图
-      const allLinkImages = [...linkImages, ...fixedDetailImgs];
+    for (var li = 0; li < linkCount; li++) {
+      var linkTitle = titlesForLinks[li];
+      var linkImages = product.images[li] ? product.images[li].files : [];
+      var allLinkImages = [].concat(linkImages, fixedDetailImgs);
+      var styleCount = Math.max(1, linkImages.length);
+      var styles = [];
+      for (var si = 0; si < styleCount; si++) { styles.push(styleLabel(si)); }
 
-      // 款式数 = 该链接下自有图片数（不含固定细节图）
-      const styleCount = Math.max(1, linkImages.length);
-      const styles = [];
-      for (let si = 0; si < styleCount; si++) {
-        styles.push(styleLabel(si));
-      }
+      var isFirstStyle = true;
+      var linkFirstImageDataUrl = null;
 
-      styles.forEach((style, styleIdx) => {
-        for (const size of sizes) {
-          const row = fields.map((f, fi) => {
-            // 空
+      styles.forEach(function(style, styleIdx) {
+        var isFirstSize = true;
+
+        for (var s = 0; s < sizes.length; s++) {
+          var size = sizes[s];
+
+          var row = fields.map(function(f, fi) {
             if (f.mode === 'empty') return '';
-
-            // 自动排序
             if (f.mode === 'auto_seq') {
-              const code = autoSeqCounters[fi];
+              var code = autoSeqCounters[fi];
               autoSeqCounters[fi] = autoIncrementCode(autoSeqCounters[fi]);
               return code;
             }
-
-            // 固定值
             if (f.mode === 'fixed') return f.fixedValue || '';
 
-            // SKU图：按款式位置取对应图片
             if (f.mode === 'sku_image') {
-              const img = linkImages[styleIdx];
+              var img = linkImages[styleIdx];
               return img ? img.dataUrl : '';
             }
 
-            // 图片上传 / 链接图片管理
             if (f.mode === 'image' || f.assoc === '链接图片管理') {
-              const imgFieldIdx = imgFields.findIndex(({i}) => i === fi);
-              if (imgFieldIdx < 0) return '';
-              const img = allLinkImages[imgFieldIdx];
-              return img ? img.dataUrl : '';
+              var idx = imgFields.findIndex(function(item){ return item.i === fi; });
+              if (idx < 0) return '';
+              var ig = allLinkImages[idx];
+              return ig ? ig.dataUrl : '';
             }
 
-            // 尺码表图片
             if (f.assoc === '尺码表图片' || f.mode === 'size_chart') {
               return product.sizeChart || '';
             }
 
-            // Ai标题
             if (f.assoc === 'Ai标题' || f.mode === 'ai') {
               return linkTitle;
             }
 
-            // 款式选项（自动生成）
             if (f.assoc === '款式选项') return style;
-
-            // 尺码选项
             if (f.assoc === '尺码选项') return size;
 
-            // 固定字段（每行相同）
-            const internalKey = getAssocKey(f.assoc);
+            var internalKey = getAssocKey(f.assoc);
             if (internalKey && FIXED_FIELDS.has(f.assoc)) {
               if (f.mode === 'fixed') return f.fixedValue || '';
               return product.fieldValues[internalKey] || '';
             }
-
-            // 其他关联字段
             if (internalKey) {
               return product.fieldValues[internalKey] || '';
             }
-
-            // 自定义
             return product.fieldValues[f.name] || '';
           });
+
           rows.push(row);
+
+          // 记录链接首行（第一个style + 第一个size）
+          if (isFirstStyle && isFirstSize) {
+            // 找第一个有图片的列
+            var firstImg = null;
+            for (var fc = 0; fc < row.length; fc++) {
+              if (typeof row[fc] === 'string' && row[fc].startsWith('data:image')) {
+                firstImg = row[fc]; break;
+              }
+            }
+            if (firstImg) linkFirstImageDataUrl = firstImg;
+          }
+          isFirstSize = false;
         }
       });
+
+      if (isFirstStyle && linkFirstImageDataUrl) {
+        // dataRowIdx = linkStarts 之前已生成的数据行数 + 当前链接首行偏移
+        // 使用 rows.length - (styles.length * sizes.length) 计算
+        var linkRowCount = styles.length * sizes.length;
+        var dataRowIdx = rows.length - linkRowCount;
+        linkStarts.push({ dataRowIdx: dataRowIdx, title: linkTitle, dataUrl: linkFirstImageDataUrl });
+      }
+      isFirstStyle = false;
     }
   });
 
-  // ===== 保留模板前5行作为表头 =====
-  const template = state.templates[state.platform];
+  // ===== 保留模板前5行作为表头（修复列数对齐） =====
+  var template = state.templates[state.platform];
+  var templateRowCount = 0;
   if (template && Array.isArray(template.data) && template.data.length > 0) {
-    const templateRows = template.data.slice(0, 5);
-    // 补齐不足5行的情况（用空行填充）
+    var templateRows = template.data.slice(0, 5);
     while (templateRows.length < 5) {
-      templateRows.push(new Array(colCount).fill(''));
+      templateRows.push([]);
     }
-    // 每行对齐列数：不够的补空，过多的截断
-    const alignedRows = templateRows.map(tr => {
-      const arr = Array.isArray(tr) ? tr : [];
-      const padded = [];
-      for (let c = 0; c < colCount; c++) {
+    // 计算最大列数（模板列 + 字段列）
+    var maxCols = colCount;
+    templateRows.forEach(function(tr) {
+      if (Array.isArray(tr) && tr.length > maxCols) maxCols = tr.length;
+    });
+    // 如果模板列更多，扩展 colCount 并补齐所有 rows
+    if (maxCols > colCount) {
+      colCount = maxCols;
+      rows.forEach(function(r) {
+        while (r.length < colCount) r.push('');
+      });
+    }
+    // 对齐模板行到 colCount
+    var alignedRows = templateRows.map(function(tr) {
+      var arr = Array.isArray(tr) ? tr : [];
+      var padded = [];
+      for (var c = 0; c < colCount; c++) {
         padded.push(c < arr.length ? (arr[c] != null ? String(arr[c]) : '') : '');
       }
       return padded;
     });
-    // 前5行（模板原始表头） + 字段名行 + 产品数据
-    rows = [...alignedRows, ...rows];
+    rows = alignedRows.concat(rows);
+    templateRowCount = alignedRows.length;
   }
 
-  return rows;
+  return { rows: rows, linkStarts: linkStarts, templateRowCount: templateRowCount, headerRowIdx: templateRowCount };
 }
 
 // =============================================
 // 轻量预览数据构建（图片不入行数据，用map单独存，避免大数组阻塞）
 // =============================================
-function buildPreviewData() {
-  const fields = state.fieldConfigs[state.platform];
-  const products = state.products[state.platform];
-  const headers = fields.map(f => f.name);
-  const rows = [headers];
-  const imgMap = new Map(); // key: "rowIdx-colIdx" → dataUrl
 
-  const imgFields = fields.map((f,i)=>({f,i})).filter(({f})=>
-    f.assoc === '链接图片管理' || f.mode === 'image'
-  );
-  const skuImgFields = fields.map((f,i)=>({f,i})).filter(({f})=>
-    f.mode === 'sku_image'
-  );
-  const autoSeqFields = fields.map((f,i)=>({f,i})).filter(({f})=> f.mode === 'auto_seq');
-  const sizeChartFields = fields.map((f,i)=>({f,i})).filter(({f})=>
-    f.assoc === '尺码表图片' || f.mode === 'size_chart'
-  );
-
-  const autoSeqCounters = {};
-  autoSeqFields.forEach(({f,i}) => { autoSeqCounters[i] = null; });
-
-  products.forEach(product => {
-    const sizesRaw = (product.fieldValues['__sizes'] || '').split(/[,，]/).map(s=>s.trim()).filter(Boolean);
-    const sizes = sizesRaw.length > 0 ? sizesRaw : [''];
-    const linkCount = Math.max(1, product.images.length);
-    const fixedDetailImgs = product.fixedDetailImages || [];
-
-    autoSeqFields.forEach(({f,i}) => {
-      autoSeqCounters[i] = product.startCode || f.fixedValue || '';
-    });
-
-    const titlesForLinks = [];
-    for (let li = 0; li < linkCount; li++) {
-      titlesForLinks.push(product.generatedTitles[li] || product.generatedTitles[0] || product.selectedTitle || '');
-    }
-
-    for (let li = 0; li < linkCount; li++) {
-      const linkTitle = titlesForLinks[li];
-      const linkImages = product.images[li] ? product.images[li].files : [];
-      const allLinkImages = [...linkImages, ...fixedDetailImgs];
-      const styleCount = Math.max(1, linkImages.length);
-      const styles = [];
-      for (let si = 0; si < styleCount; si++) { styles.push(styleLabel(si)); }
-
-      styles.forEach((style, styleIdx) => {
-        for (const size of sizes) {
-          const rowIdx = rows.length; // 当前行在rows中的索引
-          const row = fields.map((f, fi) => {
-            if (f.mode === 'empty') return '';
-            if (f.mode === 'auto_seq') {
-              const code = autoSeqCounters[fi];
-              autoSeqCounters[fi] = autoIncrementCode(autoSeqCounters[fi]);
-              return code;
-            }
-            if (f.mode === 'fixed') return f.fixedValue || '';
-
-            if (f.mode === 'sku_image') {
-              const img = linkImages[styleIdx];
-              if (img && img.dataUrl) {
-                imgMap.set(`${rowIdx}-${fi}`, img.dataUrl);
-                return '[图片]';
-              }
-              return '';
-            }
-
-            if (f.mode === 'image' || f.assoc === '链接图片管理') {
-              const imgFieldIdx = imgFields.findIndex(({i}) => i === fi);
-              if (imgFieldIdx < 0) return '';
-              const img = allLinkImages[imgFieldIdx];
-              if (img && img.dataUrl) {
-                imgMap.set(`${rowIdx}-${fi}`, img.dataUrl);
-                return '[图片]';
-              }
-              return '';
-            }
-
-            if (f.assoc === '尺码表图片' || f.mode === 'size_chart') {
-              if (product.sizeChart) {
-                imgMap.set(`${rowIdx}-${fi}`, product.sizeChart);
-                return '[图片]';
-              }
-              return '';
-            }
-
-            if (f.assoc === 'Ai标题' || f.mode === 'ai') return linkTitle;
-            if (f.assoc === '款式选项') return style;
-            if (f.assoc === '尺码选项') return size;
-
-            const internalKey = getAssocKey(f.assoc);
-            if (internalKey && FIXED_FIELDS.has(f.assoc)) {
-              if (f.mode === 'fixed') return f.fixedValue || '';
-              return product.fieldValues[internalKey] || '';
-            }
-            if (internalKey) return product.fieldValues[internalKey] || '';
-            return product.fieldValues[f.name] || '';
-          });
-          rows.push(row);
-        }
-      });
-    }
-  });
-
-  return { rows, imgMap };
-}
 
 // =============================================
 // 导出预览（先渲染文本表格，再逐批加载缩略图，流畅不卡）
 // =============================================
 async function refreshPreview() {
-  const fields = state.fieldConfigs[state.platform];
-  const products = state.products[state.platform];
-  const container = document.getElementById('exportPreviewTable');
-  if (!fields?.length || !products.length) {
+  var fields = state.fieldConfigs[state.platform];
+  var products = state.products[state.platform];
+  var container = document.getElementById('exportPreviewTable');
+  if (!fields || !fields.length || !products.length) {
     container.innerHTML = '<div class="empty-state" style="padding:40px"><p>请先完成字段配置并填写产品信息</p></div>';
     document.getElementById('previewInfo').textContent = '共 0 个产品';
     return;
   }
   try {
     container.innerHTML = '<div class="empty-state" style="padding:20px"><p>⏳ 正在生成预览…</p></div>';
-    await new Promise(r => setTimeout(r, 30));
-    const rows = buildExportData();
-    // rows 结构: [模板行0-4, 字段名行, 产品数据...]
-    const hasTemplate = !!state.templates[state.platform];
-    const templateRows = hasTemplate ? 5 : 0;
-    const headerIdx = templateRows;        // 字段名行 = 模板行后第1行
-    const dataStartIdx = templateRows + 1;  // 产品数据从模板行+字段名行之后开始
-    const totalLinks = products.reduce((s,p) => s + Math.max(1, p.images.length), 0);
-    const dataRowCount = rows.length - dataStartIdx;
-    document.getElementById('previewInfo').textContent = '共 ' + products.length + ' 个产品，' + totalLinks + ' 个链接，' + dataRowCount + ' 行数据，' + rows[0].length + ' 列（前' + templateRows + '行为模板表头）';
+    await new Promise(function(r){ setTimeout(r, 30); });
 
-    const table = document.createElement('table');
+    var result = buildExportData();
+    var rows = result.rows;
+    var linkStarts = result.linkStarts;
+    var templateRowCount = result.templateRowCount;
+    var headerRowIdx = result.headerRowIdx;
 
-    // thead：字段名行作为列头
-    if (rows.length > headerIdx) {
-      const thead = document.createElement('thead');
-      const hr = document.createElement('tr');
-      rows[headerIdx].forEach(h => { const th = document.createElement('th'); th.textContent = h; hr.appendChild(th); });
+    // headerRowIdx = 字段名行（模板行之后第一行）
+    var dataStartIdx = headerRowIdx + 1; // 数据从字段名行之后开始
+    var totalLinks = products.reduce(function(s,p){ return s + Math.max(1, p.images.length); }, 0);
+    var dataRowCount = rows.length - dataStartIdx;
+    var colCount = rows[0] ? rows[0].length : 0;
+
+    var info = '共 ' + products.length + ' 个产品，' + totalLinks + ' 个链接，' + dataRowCount + ' 行数据，' + colCount + ' 列';
+    if (templateRowCount > 0) info += '（前' + templateRowCount + '行为模板表头）';
+    document.getElementById('previewInfo').textContent = info;
+
+    // 构建表格
+    var table = document.createElement('table');
+
+    // thead = 字段名行
+    if (rows.length > headerRowIdx) {
+      var thead = document.createElement('thead');
+      var hr = document.createElement('tr');
+      rows[headerRowIdx].forEach(function(h) {
+        var th = document.createElement('th'); th.textContent = h; hr.appendChild(th);
+      });
       thead.appendChild(hr); table.appendChild(thead);
     }
 
-    const tbody = document.createElement('tbody');
+    var tbody = document.createElement('tbody');
 
-    // 模板前5行：用特殊底色标识
-    for (let i = 0; i < templateRows && i < rows.length; i++) {
-      const tr = document.createElement('tr');
+    // 模板行：蓝色底色
+    for (var ti = 0; ti < templateRowCount && ti < rows.length; ti++) {
+      var tr = document.createElement('tr');
       tr.style.cssText = 'background:#f0f5ff;font-size:.78rem;color:var(--muted);';
-      rows[i].forEach(cell => {
-        const td = document.createElement('td');
+      rows[ti].forEach(function(cell) {
+        var td = document.createElement('td');
         td.textContent = cell || '';
         tr.appendChild(td);
       });
       tbody.appendChild(tr);
     }
 
+    // 构建 linkStarts 的快速查找 Map: dataRowIdx → {title, dataUrl}
+    var linkMap = new Map();
+    linkStarts.forEach(function(ls){ linkMap.set(ls.dataRowIdx, ls); });
+
+    // 存储需要异步加载缩略图的单元格引用
+    var thumbCells = []; // [{td, dataUrl}]
+
     // 产品数据行
-    rows.slice(dataStartIdx).forEach(row => {
-      const tr = document.createElement('tr');
-      row.forEach(cell => {
-        const td = document.createElement('td');
+    var linkThumbCount = 0;
+    for (var ri = dataStartIdx; ri < rows.length; ri++) {
+      var row = rows[ri];
+      var tr = document.createElement('tr');
+
+      // 该行是否是链接首行？
+      var linkInfo = linkMap.get(ri);
+      var isLinkStart = !!linkInfo;
+
+      row.forEach(function(cell, ci) {
+        var td = document.createElement('td');
+
         if (typeof cell === 'string' && cell.startsWith('data:image')) {
+          if (isLinkStart && ci === 0 && linkInfo.dataUrl) {
+            // 链接首行第0列：用图片列替换（找到第一个图片列来放缩略图）
+            // 暂时先显示占位符，后面异步加载
+          }
+          // 普通图片单元格：纯文本
           td.textContent = '[图片]';
           td.style.cssText = 'color:var(--muted);font-size:.75rem;text-align:center;';
         } else {
           td.textContent = cell;
         }
+
         tr.appendChild(td);
       });
+
+      // 链接首行：在第一列或第一个图片列前插入缩略图
+      if (isLinkStart && linkInfo.dataUrl) {
+        // 找到这一行里第一个图片列的位置
+        var imgColIdx = -1;
+        for (var fc = 0; fc < row.length; fc++) {
+          if (typeof row[fc] === 'string' && row[fc].startsWith('data:image')) {
+            imgColIdx = fc; break;
+          }
+        }
+        if (imgColIdx >= 0 && tr.children[imgColIdx]) {
+          var imgTd = tr.children[imgColIdx];
+          imgTd.innerHTML = '<span style="color:var(--muted);font-size:.65rem;">⏳</span>';
+          imgTd.style.textAlign = 'center';
+          thumbCells.push({ td: imgTd, dataUrl: linkInfo.dataUrl, idx: linkThumbCount });
+          linkThumbCount++;
+        }
+        // 给该行加浅底色标记
+        tr.style.cssText = 'border-left:3px solid var(--primary);';
+      }
+
       tbody.appendChild(tr);
-    });
+    }
     table.appendChild(tbody);
     container.innerHTML = '';
     container.appendChild(table);
+
+    // 异步加载链接缩略图（24×24，极低质量，每批15个）
+    if (thumbCells.length > 0) {
+      var BATCH = 15;
+      for (var b = 0; b < thumbCells.length; b += BATCH) {
+        var batch = thumbCells.slice(b, b + BATCH);
+        await Promise.all(batch.map(function(cell) {
+          return compressImage(cell.dataUrl, 28, 28, 0.15).then(function(thumb) {
+            var img = document.createElement('img');
+            img.src = thumb;
+            img.style.cssText = 'width:24px;height:24px;object-fit:cover;border-radius:2px;vertical-align:middle;';
+            img.title = '链接缩略图';
+            cell.td.textContent = '';
+            cell.td.appendChild(img);
+          }).catch(function() {
+            cell.td.innerHTML = '<span style="font-size:.65rem;color:var(--muted);">⚠</span>';
+          });
+        }));
+        if (b + BATCH < thumbCells.length) {
+          await new Promise(function(r){ setTimeout(r, 0); });
+        }
+      }
+    }
   } catch(e) {
     console.error('Preview error:', e);
     container.innerHTML = '<div class="empty-state" style="padding:40px"><p style="color:var(--danger)">预览生成失败：' + (e.message || '未知错误') + '</p></div>';
@@ -2282,45 +2269,62 @@ async function refreshPreview() {
 // 导出 Excel（全面错误处理 + 分批压缩）
 // =============================================
 async function exportExcel() {
-  const btn = document.querySelector('#page-export-preview .btn-success');
+  var btn = document.querySelector('#page-export-preview .btn-success');
   if (btn) { btn.disabled = true; btn.textContent = '导出中...'; }
   try {
-    const fields = state.fieldConfigs[state.platform];
-    const products = state.products[state.platform];
-    if (!fields?.length) { showToast('请先导入并配置字段', 'warn'); return; }
+    var fields = state.fieldConfigs[state.platform];
+    var products = state.products[state.platform];
+    if (!fields || !fields.length) { showToast('请先导入并配置字段', 'warn'); return; }
     if (!products.length) { showToast('请先添加产品信息', 'warn'); return; }
     if (typeof XLSX === 'undefined') { showToast('Excel 组件加载失败，请刷新页面', 'error'); return; }
 
     showToast('正在生成导出数据…', 'info');
-    const rows = buildExportData();
+    var result = buildExportData();
+    var rows = result.rows;
 
+    // 收集图片单元格
     var imgCells = [];
-    rows.slice(1).forEach((row, ri) => {
-      row.forEach((cell, ci) => {
-        if (typeof cell === 'string' && cell.startsWith('data:image')) {
-          imgCells.push({ ri: ri + 1, ci: ci, dataUrl: cell, filename: 'img_' + (ri+1) + '_' + ci + '.jpg' });
+    for (var ri = 1; ri < rows.length; ri++) {
+      var row = rows[ri];
+      for (var ci = 0; ci < row.length; ci++) {
+        if (typeof row[ci] === 'string' && row[ci].startsWith('data:image')) {
+          imgCells.push({ ri: ri, ci: ci, dataUrl: row[ci], filename: 'img_' + ri + '_' + ci + '.jpg' });
         }
-      });
-    });
+      }
+    }
 
+    // 尝试上传图片到图床，失败则回退为文本占位符
     if (imgCells.length > 0) {
       if (!sb) {
-        showToast('图床未连接，请先在 Supabase Dashboard 创建 product-images Bucket（详见 supabase-schema.sql）', 'error');
-        return;
-      }
-      showToast('正在上传 ' + imgCells.length + ' 张图片到图床，请稍候…', 'info');
-      var BATCH = 10;
-      var uploaded = 0;
-      for (var i = 0; i < imgCells.length; i += BATCH) {
-        var batch = imgCells.slice(i, i + BATCH);
-        var results = await Promise.all(batch.map(function(item) {
-          return uploadImageToStorage(item.dataUrl, item.filename).then(function(url) {
-            return { ri: item.ri, ci: item.ci, url: url };
+        // 无 Supabase 连接：直接写占位符
+        showToast('图床未连接，图片将导出为占位符（上传图片后可替换为实际URL）', 'warn');
+        imgCells.forEach(function(cell) { rows[cell.ri][cell.ci] = '[图片' + (imgCells.indexOf(cell) + 1) + ']'; });
+      } else {
+        showToast('正在上传 ' + imgCells.length + ' 张图片到图床…', 'info');
+        var BATCH = 10;
+        var uploaded = 0;
+        var failCount = 0;
+        for (var i = 0; i < imgCells.length; i += BATCH) {
+          var batch = imgCells.slice(i, i + BATCH);
+          var results = await Promise.all(batch.map(function(cell) {
+            return uploadImageToStorage(cell.dataUrl, cell.filename).then(function(url) {
+              return { ri: cell.ri, ci: cell.ci, url: url };
+            });
+          }));
+          results.forEach(function(r) {
+            if (r.url) {
+              rows[r.ri][r.ci] = r.url;
+            } else {
+              rows[r.ri][r.ci] = '[图片]';
+              failCount++;
+            }
           });
-        }));
-        results.forEach(function(r) { rows[r.ri][r.ci] = r.url || '[上传失败]'; });
-        uploaded += batch.length;
-        showToast('图片上传中… (' + uploaded + '/' + imgCells.length + ')', 'info');
+          uploaded += batch.length;
+          showToast('图片上传中… (' + uploaded + '/' + imgCells.length + ')', 'info');
+        }
+        if (failCount > 0) {
+          showToast('上传完成：' + (imgCells.length - failCount) + ' 张成功，' + failCount + ' 张失败（已标为[图片]），请确认 Supabase Storage bucket 已创建', 'warn');
+        }
       }
     }
 
