@@ -1950,7 +1950,8 @@ function buildExportData() {
   const fields = state.fieldConfigs[state.platform];
   const products = state.products[state.platform];
   const headers = fields.map(f => f.name);
-  const rows = [headers];
+  const colCount = fields.length;
+  let rows = [headers];
 
   // 找出图片类字段（按顺序），SKU图字段单独分组
   const imgFields = fields.map((f,i)=>({f,i})).filter(({f})=>
@@ -2071,6 +2072,27 @@ function buildExportData() {
       });
     }
   });
+
+  // ===== 保留模板前5行作为表头 =====
+  const template = state.templates[state.platform];
+  if (template && Array.isArray(template.data) && template.data.length > 0) {
+    const templateRows = template.data.slice(0, 5);
+    // 补齐不足5行的情况（用空行填充）
+    while (templateRows.length < 5) {
+      templateRows.push(new Array(colCount).fill(''));
+    }
+    // 每行对齐列数：不够的补空，过多的截断
+    const alignedRows = templateRows.map(tr => {
+      const arr = Array.isArray(tr) ? tr : [];
+      const padded = [];
+      for (let c = 0; c < colCount; c++) {
+        padded.push(c < arr.length ? (arr[c] != null ? String(arr[c]) : '') : '');
+      }
+      return padded;
+    });
+    // 前5行（模板原始表头） + 字段名行 + 产品数据
+    rows = [...alignedRows, ...rows];
+  }
 
   return rows;
 }
@@ -2199,16 +2221,41 @@ async function refreshPreview() {
     container.innerHTML = '<div class="empty-state" style="padding:20px"><p>⏳ 正在生成预览…</p></div>';
     await new Promise(r => setTimeout(r, 30));
     const rows = buildExportData();
+    // rows 结构: [模板行0-4, 字段名行, 产品数据...]
+    const hasTemplate = !!state.templates[state.platform];
+    const templateRows = hasTemplate ? 5 : 0;
+    const headerIdx = templateRows;        // 字段名行 = 模板行后第1行
+    const dataStartIdx = templateRows + 1;  // 产品数据从模板行+字段名行之后开始
     const totalLinks = products.reduce((s,p) => s + Math.max(1, p.images.length), 0);
-    document.getElementById('previewInfo').textContent = '共 ' + products.length + ' 个产品，' + totalLinks + ' 个链接，' + (rows.length-1) + ' 行数据，' + rows[0].length + ' 列';
-    // 纯文本渲染，图片单元格只显示 [图片]，不渲染缩略图，百款产品秒开
+    const dataRowCount = rows.length - dataStartIdx;
+    document.getElementById('previewInfo').textContent = '共 ' + products.length + ' 个产品，' + totalLinks + ' 个链接，' + dataRowCount + ' 行数据，' + rows[0].length + ' 列（前' + templateRows + '行为模板表头）';
+
     const table = document.createElement('table');
-    const thead = document.createElement('thead');
-    const hr = document.createElement('tr');
-    rows[0].forEach(h => { const th = document.createElement('th'); th.textContent = h; hr.appendChild(th); });
-    thead.appendChild(hr); table.appendChild(thead);
+
+    // thead：字段名行作为列头
+    if (rows.length > headerIdx) {
+      const thead = document.createElement('thead');
+      const hr = document.createElement('tr');
+      rows[headerIdx].forEach(h => { const th = document.createElement('th'); th.textContent = h; hr.appendChild(th); });
+      thead.appendChild(hr); table.appendChild(thead);
+    }
+
     const tbody = document.createElement('tbody');
-    rows.slice(1).forEach(row => {
+
+    // 模板前5行：用特殊底色标识
+    for (let i = 0; i < templateRows && i < rows.length; i++) {
+      const tr = document.createElement('tr');
+      tr.style.cssText = 'background:#f0f5ff;font-size:.78rem;color:var(--muted);';
+      rows[i].forEach(cell => {
+        const td = document.createElement('td');
+        td.textContent = cell || '';
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    }
+
+    // 产品数据行
+    rows.slice(dataStartIdx).forEach(row => {
       const tr = document.createElement('tr');
       row.forEach(cell => {
         const td = document.createElement('td');
