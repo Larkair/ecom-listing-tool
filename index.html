@@ -658,7 +658,7 @@ async function loadFromSupabase() {
         if (c.template_headers && c.template_headers.length > 0) {
           state.templates[c.platform] = {
             filename: c.template_filename || '',
-            data: [c.template_headers],
+            data: c.template_data?.length > 0 ? c.template_data : [c.template_headers],
             fields: c.field_configs || []
           };
         }
@@ -735,6 +735,7 @@ async function syncToSupabase() {
       platform,
       template_filename: tpl?.filename || null,
       template_headers: tpl?.data?.[0] || [],
+      template_data: tpl?.data?.slice(0, 5) || [],
       field_configs: fields,
       updated_at: new Date().toISOString()
     }, { onConflict: 'platform' });
@@ -1197,6 +1198,7 @@ async function saveAsScheme() {
     scheme_name: name,
     template_filename: tpl?.filename || null,
     template_headers: tpl?.data?.[0] || [],
+    template_data: tpl?.data?.slice(0, 5) || [],
     field_configs: fields || []
   };
 
@@ -1237,7 +1239,7 @@ function loadSchemeById(id) {
   state.fieldConfigs[platform] = normalizeFields(JSON.parse(JSON.stringify(scheme.field_configs)));
   state.templates[platform] = {
     filename: scheme.template_filename || '',
-    data: scheme.template_headers?.length ? [scheme.template_headers] : [],
+    data: scheme.template_data?.length > 0 ? scheme.template_data : (scheme.template_headers?.length ? [scheme.template_headers] : []),
     fields: scheme.field_configs || []
   };
   state.currentSchemeName[platform] = scheme.scheme_name;
@@ -2298,7 +2300,7 @@ async function exportExcel() {
       if (!sb) {
         // 无 Supabase 连接：直接写占位符
         showToast('图床未连接，图片将导出为占位符（上传图片后可替换为实际URL）', 'warn');
-        imgCells.forEach(function(cell) { rows[cell.ri][cell.ci] = '[图片' + (imgCells.indexOf(cell) + 1) + ']'; });
+        imgCells.forEach(function(cell) { rows[cell.ri][cell.ci] = '[图片:需前往Supabase Dashboard创建product-images Bucket]'; });
       } else {
         showToast('正在上传 ' + imgCells.length + ' 张图片到图床…', 'info');
         var BATCH = 10;
@@ -2315,7 +2317,7 @@ async function exportExcel() {
             if (r.url) {
               rows[r.ri][r.ci] = r.url;
             } else {
-              rows[r.ri][r.ci] = '[图片]';
+              rows[r.ri][r.ci] = '[图片:上传失败-请检查product-images Bucket]';
               failCount++;
             }
           });

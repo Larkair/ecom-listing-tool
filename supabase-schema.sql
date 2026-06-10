@@ -9,10 +9,17 @@ CREATE TABLE IF NOT EXISTS ecom_configs (
   platform TEXT NOT NULL UNIQUE,
   template_filename TEXT,
   template_headers JSONB DEFAULT '[]'::jsonb,
+  template_data JSONB DEFAULT '[]'::jsonb,
   field_configs JSONB DEFAULT '[]'::jsonb,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- 为已有表添加 template_data 列（如果列不存在则添加，不会报错）
+DO $$ BEGIN
+  ALTER TABLE ecom_configs ADD COLUMN IF NOT EXISTS template_data JSONB DEFAULT '[]'::jsonb;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
 
 -- 2. 产品表
 CREATE TABLE IF NOT EXISTS ecom_products (
@@ -46,10 +53,17 @@ CREATE TABLE IF NOT EXISTS ecom_config_schemes (
   scheme_name TEXT NOT NULL,
   template_filename TEXT,
   template_headers JSONB DEFAULT '[]'::jsonb,
+  template_data JSONB DEFAULT '[]'::jsonb,
   field_configs JSONB DEFAULT '[]'::jsonb,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- 为已有表添加 template_data 列
+DO $$ BEGIN
+  ALTER TABLE ecom_config_schemes ADD COLUMN IF NOT EXISTS template_data JSONB DEFAULT '[]'::jsonb;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
 
 -- ============================================
 -- RLS 策略：允许 anon 用户读写
