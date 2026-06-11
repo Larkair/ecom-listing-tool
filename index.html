@@ -10,6 +10,8 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"
     onerror="var s=document.createElement('script');s.src='https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js';document.head.appendChild(s);">
 </script>
+  <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"
+    onerror="var s=document.createElement('script');s.src='https://unpkg.com/exceljs@4.4.0/dist/exceljs.min.js';document.head.appendChild(s);"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"
     onerror="var s=document.createElement('script');s.src='https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.min.js';document.head.appendChild(s);"></script>
   <style>
@@ -271,6 +273,10 @@
     .page { display: none; }
     .page.active { display: block; }
 
+    /* 去水印模块 */
+    .wm-card canvas { transition: outline .15s; }
+    .wm-card canvas:hover { outline: 2px solid var(--pri); outline-offset: -2px; }
+
     /* 工具类 */
     .flex { display: flex; } .gap8 { gap: 8px; } .gap12 { gap: 12px; }
     .items-center { align-items: center; } .flex-wrap { flex-wrap: wrap; }
@@ -369,6 +375,10 @@
     <div class="sidebar-item" onclick="showPage('settings',this)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
       工具设置
+    </div>
+    <div class="sidebar-item" onclick="showPage('watermark',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2.69l5.66 5.66a8 8 0 11-11.31 0z"/><line x1="12" y1="8" x2="12" y2="14"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      图片去水印
     </div>
   </nav>
 
@@ -540,6 +550,50 @@
       </div>
     </div>
 
+    <!-- ====== 图片批量去水印 ====== -->
+    <div id="page-watermark" class="page">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:12px">
+        <div>
+          <h2 style="margin:0 0 4px;font-size:1.15rem">🖼️ 图片批量去水印</h2>
+          <p style="margin:0;font-size:.82rem;color:var(--muted)">上传图片 → 框选水印区域 → 一键去除 → 批量导出</p>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap" id="wmToolbar">
+          <button class="btn btn-outline btn-sm" onclick="document.getElementById('wmFileInput').click()" id="wmUploadBtn">
+            📁 上传图片
+          </button>
+          <input type="file" id="wmFileInput" accept="image/*" multiple style="display:none" onchange="handleWmFileSelect(this)" />
+          <button class="btn btn-primary btn-sm" onclick="batchRemoveWatermark()" id="wmProcessBtn" disabled>
+            ✨ 批量去水印
+          </button>
+          <button class="btn btn-success btn-sm" onclick="exportWmImages()" id="wmExportBtn" disabled>
+            💾 导出图片
+          </button>
+          <button class="btn btn-outline btn-sm btn-danger" onclick="clearWmAll()" id="wmClearBtn" disabled>
+            🗑 清空
+          </button>
+        </div>
+      </div>
+
+      <!-- 操作提示 -->
+      <div class="card" style="margin-bottom:16px;padding:10px 16px;background:linear-gradient(135deg,#eff6ff,#f0f9ff);border-left:4px solid #1677ff">
+        <div style="font-size:.8rem;color:var(--muted);display:flex;gap:24px;flex-wrap:wrap">
+          <span>🖱 <b>鼠标拖拽</b>框选水印区域</span>
+          <span>🎨 红色区域 = 要移除的水印</span>
+          <span>↩ <b>右键点击</b>图片 = 撤销所有标记</span>
+          <span>🔄 可多次框选多个水印区域</span>
+        </div>
+      </div>
+
+      <!-- 图片网格 -->
+      <div id="wmImageGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px">
+        <div id="wmEmptyState" style="grid-column:1/-1;text-align:center;padding:60px 20px;color:var(--muted)">
+          <div style="font-size:3rem;margin-bottom:12px">📷</div>
+          <p style="font-size:.95rem;margin-bottom:16px">拖拽图片到此处，或点击"上传图片"按钮</p>
+          <button class="btn btn-primary" onclick="document.getElementById('wmFileInput').click()">选择图片文件</button>
+        </div>
+      </div>
+    </div>
+
     <!-- ====== 方案管理弹窗 ====== -->
     <div class="modal-overlay" id="schemeManagerModal">
       <div class="modal" style="width:600px">
@@ -627,7 +681,7 @@ const MAX_IMG_PER_GROUP = 9;
 // =============================================
 // Supabase 初始化（容错：CDN 加载失败不影响核心功能）
 // =============================================
-console.log('🛠 批量上架工具 V19 | 2026-06-11 | 字段提取引导 | 按链接排序 | 模板基底导出');
+console.log('🛠 批量上架工具 V23 | 2026-06-11 | 图片批量去水印模块 | 内容感知填充 | 批量导出');
 // =============================================
 const SUPABASE_URL = 'https://khrppyhcjzkkokyhnhhd.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtocnBweWhjanpra29reWhuaGhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwNzY1NDEsImV4cCI6MjA5NjY1MjU0MX0.uS9YablBNwjUmQlwRbLRw3SEPNgEnO1Uc6Poe1SeB88';
@@ -883,10 +937,9 @@ function restoreTemplateFromLocalStorage() {
     // 恢复 rawData
     if (base64) {
       try {
-        const binary = atob(base64);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-        state.templates[platform].rawData = Array.from(bytes);
+        const bytes = base64ToArrayBuffer(base64);
+        state.templates[platform].rawData = Array.from(new Uint8Array(bytes));
+        console.log('从 localStorage 恢复模板(' + platform + '), 大小:', bytes.byteLength, 'bytes');
       } catch(e) { console.warn('恢复模板文件失败(' + platform + '):', e.message); }
     }
     
@@ -1021,10 +1074,11 @@ function handleTemplateImport(input) {
       };
       // 存到 localStorage（base64 编码，避免 Array 转 JSON 太大）
       try {
-        const base64 = btoa(String.fromCharCode.apply(null, rawArray));
+        const base64 = arrayBufferToBase64(rawArray);
         localStorage.setItem('tpl_raw_' + platform, base64);
         localStorage.setItem('tpl_sheets_' + platform, JSON.stringify(sheetNames));
         localStorage.setItem('tpl_config_' + platform, JSON.stringify(defaultConfig));
+        console.log('模板已保存到 localStorage, base64 长度:', base64.length);
       } catch (lsErr) {
         console.warn('localStorage 保存模板失败（可能超出大小限制）:', lsErr.message);
       }
@@ -1054,8 +1108,15 @@ function showFieldExtractionUI(sheetNames, allSheetData, defaultSheet, defaultRo
   const oldWriteCard = document.getElementById('templateConfigCard');
   if (oldWriteCard) oldWriteCard.remove();
 
+  // 计算每个 sheet 的行数（包含隐藏行）
+  var sheetRowCounts = {};
+  sheetNames.forEach(function(sn) {
+    sheetRowCounts[sn] = (allSheetData[sn] || []).length;
+  });
+
   const sheetOptions = (sheetNames || ['Sheet1']).map(function(name) {
-    return '<option value="' + escHtml(name) + '" ' + (name === defaultSheet ? 'selected' : '') + '>' + escHtml(name) + '</option>';
+    var rows = sheetRowCounts[name] || 0;
+    return '<option value="' + escHtml(name) + '" ' + (name === defaultSheet ? 'selected' : '') + '>' + escHtml(name) + '（' + rows + ' 行）</option>';
   }).join('');
 
   // 初始预览行
@@ -1067,25 +1128,29 @@ function showFieldExtractionUI(sheetNames, allSheetData, defaultSheet, defaultRo
       }).join('')
     : '<div style="color:var(--muted)">该行无数据</div>';
 
+  var totalRows = sheetRowCounts[defaultSheet] || 0;
+  var defaultMax = Math.max(totalRows, 100);
+
   const cardHtml = `
     <div id="fieldExtractionCard" class="card" style="margin-bottom:16px;border-left:4px solid #f59e0b;background:linear-gradient(135deg,#fffbeb,#fff7ed)">
       <h3 style="margin-bottom:4px;font-size:.95rem">📋 字段提取配置</h3>
-      <p style="font-size:.78rem;color:var(--muted);margin-bottom:14px">请选择模板中哪一页（Sheet）的哪一行作为字段名来配置</p>
+      <p style="font-size:.78rem;color:var(--muted);margin-bottom:6px">请选择模板中哪一页（Sheet）的哪一行作为字段名来配置</p>
+      <p style="font-size:.73rem;color:#f59e0b;margin-bottom:12px;background:#fef3c7;padding:4px 8px;border-radius:4px;display:inline-block">⚠️ 行号包含隐藏行，如模板中有隐藏行也会被计入序号</p>
       <div style="display:flex;gap:20px;align-items:flex-end;flex-wrap:wrap;margin-bottom:14px">
         <div>
           <label style="font-size:.82rem;color:var(--muted);display:block;margin-bottom:4px">字段所在 Sheet（第几页）</label>
-          <select id="extSheetName" class="form-ctrl" style="min-width:160px" onchange="onExtractionChange()">
+          <select id="extSheetName" class="form-ctrl" style="min-width:200px" onchange="onExtractionChange()">
             ${sheetOptions}
           </select>
         </div>
         <div>
-          <label style="font-size:.82rem;color:var(--muted);display:block;margin-bottom:4px">字段所在行号</label>
-          <input id="extRowNum" type="number" class="form-ctrl" value="${defaultRow}" min="1" max="100" style="width:90px" onchange="onExtractionChange()" />
+          <label style="font-size:.82rem;color:var(--muted);display:block;margin-bottom:4px">字段所在行号（1~${defaultMax}）</label>
+          <input id="extRowNum" type="number" class="form-ctrl" value="${defaultRow}" min="1" max="${defaultMax}" style="width:90px" onchange="onExtractionChange()" />
         </div>
         <button class="btn btn-primary btn-sm" onclick="onExtractionConfirm()" style="height:38px">✅ 确认提取</button>
       </div>
       <div style="font-size:.78rem;color:var(--muted);margin-bottom:6px">
-        模板共 ${sheetNames.length} 个 Sheet：${sheetNames.map(function(n,i){return '【'+(i+1)+'】'+n;}).join('、')}
+        模板共 ${sheetNames.length} 个 Sheet：${sheetNames.map(function(n,i){return '【'+(i+1)+'】'+n+'（'+sheetRowCounts[n]+'行）';}).join('、')}
       </div>
       <div id="extPreviewArea" style="background:#fafafa;border-radius:8px;padding:10px 14px;max-height:200px;overflow-y:auto;font-size:.78rem;line-height:1.7">
         <div style="color:var(--muted);font-size:.75rem;margin-bottom:6px">📌 当前选中行预览（将作为字段名）：</div>
@@ -1100,7 +1165,7 @@ function showFieldExtractionUI(sheetNames, allSheetData, defaultSheet, defaultRo
   }
 
   // 保存 allSheetData 和 writeConfig 到全局临时变量，供 onExtractionChange 使用
-  window.__extractionData = { allSheetData: allSheetData, writeConfig: writeConfig || {} };
+  window.__extractionData = { allSheetData: allSheetData, writeConfig: writeConfig || {}, sheetRowCounts: sheetRowCounts };
 }
 
 function onExtractionChange() {
@@ -1111,8 +1176,21 @@ function onExtractionChange() {
 
   var sn = sheetSelect.value;
   var rn = parseInt(rowInput.value) || 1;
-  var allSheetData = (window.__extractionData || {}).allSheetData || {};
+  var extData = window.__extractionData || {};
+  var allSheetData = extData.allSheetData || {};
+  var sheetRowCounts = extData.sheetRowCounts || {};
   var previewData = (allSheetData[sn] || [])[rn - 1] || [];
+
+  // 动态更新行号输入框的最大值和标签
+  var totalRows = sheetRowCounts[sn] || (allSheetData[sn] || []).length;
+  if (totalRows > 0) {
+    rowInput.max = totalRows;
+    // 更新 label
+    var labelEl = rowInput.parentElement.querySelector('label');
+    if (labelEl) {
+      labelEl.textContent = '字段所在行号（1~' + totalRows + '，含隐藏行）';
+    }
+  }
 
   var previewHtml = previewData.length > 0
     ? previewData.map(function(cell, idx) {
@@ -1187,7 +1265,8 @@ function showTemplateConfigUI(sheetNames, currentConfig) {
 
   const cardHtml = `
     <div id="templateConfigCard" class="card" style="margin-bottom:16px;border-left:4px solid #1677ff">
-      <h3 style="margin-bottom:12px;font-size:.95rem">⚙️ 模板写入配置</h3>
+      <h3 style="margin-bottom:4px;font-size:.95rem">⚙️ 模板写入配置</h3>
+      <p style="font-size:.73rem;color:#1677ff;margin-bottom:10px;background:#e6f4ff;padding:4px 8px;border-radius:4px;display:inline-block">💡 行号包含隐藏行，导出时模板全部格式（合并单元格、隐藏行列、样式等）均完整保留</p>
       <div style="display:flex;gap:20px;align-items:flex-end;flex-wrap:wrap">
         <div>
           <label style="font-size:.82rem;color:var(--muted);display:block;margin-bottom:4px">写入目标 Sheet</label>
@@ -1196,7 +1275,7 @@ function showTemplateConfigUI(sheetNames, currentConfig) {
           </select>
         </div>
         <div>
-          <label style="font-size:.82rem;color:var(--muted);display:block;margin-bottom:4px">数据起始行（第几行开始写数据）</label>
+          <label style="font-size:.82rem;color:var(--muted);display:block;margin-bottom:4px">数据起始行（含隐藏行，第几行开始写）</label>
           <input id="cfgDataStartRow" type="number" class="form-ctrl" value="${config.dataStartRow}" min="1" max="100" style="width:90px" onchange="onTemplateConfigChange()" />
         </div>
         <div style="font-size:.78rem;color:var(--muted);padding-bottom:6px">
@@ -1252,16 +1331,37 @@ function loadTemplateConfig(platform) {
   return null;
 }
 
+// =============================================
+// 二进制 ↔ Base64 编码（分块处理，避免大文件栈溢出）
+// =============================================
+function arrayBufferToBase64(byteArray) {
+  // byteArray 可以是 Array 或 Uint8Array
+  var bytes = byteArray instanceof Uint8Array ? byteArray : new Uint8Array(byteArray);
+  var CHUNK = 0x8000; // 32KB chunks
+  var chunks = [];
+  for (var i = 0; i < bytes.length; i += CHUNK) {
+    var slice = bytes.subarray(i, i + CHUNK);
+    chunks.push(String.fromCharCode.apply(null, slice));
+  }
+  return btoa(chunks.join(''));
+}
+
+function base64ToArrayBuffer(base64) {
+  var binary = atob(base64);
+  var bytes = new Uint8Array(binary.length);
+  for (var i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes.buffer;
+}
+
 // 读取保存的模板原始文件（优先 localStorage，其次 state）
 async function getTemplateRawData(platform) {
   // 先试 localStorage
   try {
     const base64 = localStorage.getItem('tpl_raw_' + platform);
     if (base64) {
-      const binary = atob(base64);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-      return bytes.buffer;
+      return base64ToArrayBuffer(base64);
     }
   } catch(e) { console.warn('localStorage 读取模板失败:', e.message); }
   // 再试 state
@@ -1517,12 +1617,19 @@ function renderSchemeList() {
   }
   container.innerHTML = schemes.map((s, i) => {
     const isCurrent = s.scheme_name === state.currentSchemeName[state.platform];
+    const hasTemplate = !!(s.template_rawdata);
+    var tplMeta = {};
+    try { tplMeta = (typeof s.template_meta === 'string') ? JSON.parse(s.template_meta) : (s.template_meta || {}); } catch(e) {}
+    const sheetCount = (tplMeta.sheetNames || []).length;
+    const tplInfo = hasTemplate
+      ? (sheetCount > 1 ? '📎含模板(' + sheetCount + '页)' : '📎含模板')
+      : (s.template_filename ? '📄仅字段' : '📋仅配置');
     return `
       <div class="scheme-item">
         <div class="sicon">${s.scheme_name.charAt(0).toUpperCase()}</div>
         <div class="sinfo">
           <div class="sname">${escHtml(s.scheme_name)} ${isCurrent ? '<span class="current-scheme-badge">当前</span>' : ''}</div>
-          <div class="smeta">${(s.field_configs||[]).length} 个字段 · ${s.template_filename||'无模板'} · ${new Date(s.updated_at).toLocaleString('zh-CN')}</div>
+          <div class="smeta">${(s.field_configs||[]).length} 个字段 · ${tplInfo} · ${new Date(s.updated_at).toLocaleString('zh-CN')}</div>
         </div>
         <div class="sactions">
           <button class="btn btn-outline btn-sm" onclick="event.stopPropagation();loadSchemeById(${s.id})">应用</button>
@@ -1539,14 +1646,37 @@ async function saveAsScheme() {
   const fields = state.fieldConfigs[platform];
   const tpl = state.templates[platform];
 
+  if (!tpl) { showToast('请先导入模板', 'warn'); return; }
+
+  // 获取模板原始文件的 base64（优先 localStorage，其次从 state.rawData 编码）
+  var templateRawData = null;
+  try {
+    templateRawData = localStorage.getItem('tpl_raw_' + platform);
+    if (!templateRawData && tpl.rawData) {
+      templateRawData = arrayBufferToBase64(tpl.rawData);
+    }
+  } catch(e) { console.warn('获取模板原始数据失败:', e.message); }
+
+  // 模板元数据（Sheet 列表、写入配置、提取配置）
+  var templateMeta = {
+    sheetNames: tpl.sheetNames || [],
+    config: tpl.config || { sheetName: 'Sheet1', dataStartRow: 6 },
+    extractSheet: tpl.extractSheet || (tpl.sheetNames && tpl.sheetNames[0]) || 'Sheet1',
+    extractRow: tpl.extractRow || 1
+  };
+
   const scheme = {
     platform,
     scheme_name: name,
-    template_filename: tpl?.filename || null,
-    template_headers: tpl?.data?.[0] || [],
-    template_data: tpl?.data?.slice(0, 5) || [],
+    template_filename: tpl.filename || null,
+    template_headers: tpl.data?.[0] || [],
+    template_data: tpl.data?.slice(0, 5) || [],
+    template_rawdata: templateRawData || null,
+    template_meta: templateMeta,
     field_configs: fields || []
   };
+
+  console.log('📋 保存方案:', name, '| rawData 长度:', (templateRawData||'').length, '| sheets:', templateMeta.sheetNames.length);
 
   try {
     const { data, error } = await sb.from('ecom_config_schemes').insert(scheme).select('id').single();
@@ -1560,7 +1690,7 @@ async function saveAsScheme() {
     updateCurrentSchemeBadge();
     renderSchemeList();
     document.getElementById('newSchemeName').value = '';
-    showToast('方案「' + name + '」已保存', 'success');
+    showToast('方案「' + name + '」已保存（含模板文件）', 'success');
   } catch(e) {
     console.error('Save scheme error:', e);
     // 降级 localStorage
@@ -1574,7 +1704,7 @@ async function saveAsScheme() {
     renderSchemeList();
     document.getElementById('newSchemeName').value = '';
     localStorage.setItem('ecom_schemes_fallback', JSON.stringify(state.configSchemes));
-    showToast('方案已本地保存（云端暂不可用）', 'warn');
+    showToast('方案已本地保存（含模板文件，云端暂不可用）', 'warn');
   }
 }
 
@@ -1583,19 +1713,61 @@ function loadSchemeById(id) {
   const scheme = state.configSchemes[platform].find(s => s.id === id);
   if (!scheme) return;
   state.fieldConfigs[platform] = normalizeFields(JSON.parse(JSON.stringify(scheme.field_configs)));
-  state.templates[platform] = {
+
+  // 恢复模板数据（完整字段，支持新老方案兼容）
+  var tplData = scheme.template_data?.length > 0
+    ? scheme.template_data
+    : (scheme.template_headers?.length ? [scheme.template_headers] : []);
+
+  // 解析 template_meta（新字段）或使用默认值
+  var meta = {};
+  try {
+    meta = (scheme.template_meta && typeof scheme.template_meta === 'string')
+      ? JSON.parse(scheme.template_meta)
+      : (scheme.template_meta || {});
+  } catch(e) { meta = {}; }
+
+  var tpl = {
     filename: scheme.template_filename || '',
-    data: scheme.template_data?.length > 0 ? scheme.template_data : (scheme.template_headers?.length ? [scheme.template_headers] : []),
-    fields: scheme.field_configs || []
+    data: tplData,
+    fields: scheme.field_configs || [],
+    sheetNames: meta.sheetNames || [],
+    config: meta.config || { sheetName: 'Sheet1', dataStartRow: 6 },
+    extractSheet: meta.extractSheet || (meta.sheetNames && meta.sheetNames[0]) || 'Sheet1',
+    extractRow: meta.extractRow || 1
   };
+
+  // 恢复原始模板文件（base64 → ArrayBuffer → Uint8Array→Array）
+  var rawDataBase64 = scheme.template_rawdata || null;
+  if (rawDataBase64) {
+    try {
+      var rawBuf = base64ToArrayBuffer(rawDataBase64);
+      tpl.rawData = Array.from(new Uint8Array(rawBuf));
+      // 同时写入 localStorage 以便 getTemplateRawData() 能找到
+      localStorage.setItem('tpl_raw_' + platform, rawDataBase64);
+      localStorage.setItem('tpl_sheets_' + platform, JSON.stringify(tpl.sheetNames));
+      localStorage.setItem('tpl_config_' + platform, JSON.stringify(tpl.config));
+      if (tpl.extractSheet || tpl.extractRow) {
+        localStorage.setItem('tpl_extract_' + platform, JSON.stringify({ sheet: tpl.extractSheet, row: tpl.extractRow }));
+      }
+      console.log('📋 已从方案恢复模板文件,', rawBuf.byteLength, 'bytes,', tpl.sheetNames.length, 'sheets');
+    } catch(e) {
+      console.warn('恢复模板文件失败:', e.message);
+    }
+  } else {
+    console.log('📋 方案不含模板文件（旧方案或仅含字段配置）');
+  }
+
+  state.templates[platform] = tpl;
   state.currentSchemeName[platform] = scheme.scheme_name;
   updateCurrentSchemeBadge();
   renderFieldList();
   document.getElementById('fieldConfigCard').style.display = 'block';
   document.getElementById('uploadZone').style.display = 'none';
-  document.getElementById('importedFileName').textContent = '✓ ' + (scheme.template_filename || '方案模板');
+  document.getElementById('importedFileName').textContent = '✓ ' + (scheme.template_filename || '方案模板')
+    + (rawDataBase64 ? ' 📎含模板' : '');
   closeSchemeManager();
-  showToast('已加载方案「' + scheme.scheme_name + '」', 'success');
+  showToast('已加载方案「' + scheme.scheme_name + '」' + (rawDataBase64 ? '（含模板文件）' : ''), 'success');
 }
 
 async function deleteSchemeById(id) {
@@ -2298,7 +2470,7 @@ const FIXED_FIELDS = new Set(['类目','品牌','描述','重量','长度','宽�
 
 function buildExportData(includeTemplate) {
   // includeTemplate: true = 包含模板行（用于预览），false = 仅数据行（用于导出写入模板）
-  if (typeof includeTemplate === 'undefined') includeTemplate = true;
+  if (typeof includeTemplate === 'undefined') includeTemplate = false;
   const fields = state.fieldConfigs[state.platform];
   const products = state.products[state.platform];
   const headers = fields.map(f => f.name);
@@ -2442,10 +2614,9 @@ function buildExportData(includeTemplate) {
   });
 
   // ===== 模板行处理（仅当 includeTemplate = true 时，用于预览） =====
-  if (!includeTemplate) templateRowCount = 0; // 不包含模板行
   var template = state.templates[state.platform];
   var templateRowCount = 0;
-  if (template && Array.isArray(template.data) && template.data.length > 0) {
+  if (includeTemplate && template && Array.isArray(template.data) && template.data.length > 0) {
     var templateRows = template.data.slice(0, 5);
     while (templateRows.length < 5) {
       templateRows.push([]);
@@ -2475,7 +2646,7 @@ function buildExportData(includeTemplate) {
     templateRowCount = alignedRows.length;
   }
 
-  console.log('buildExportData: includeTemplate=' + includeTemplate + ', templateRowCount=' + templateRowCount + ', 总行数=' + rows.length);
+  console.log('buildExportData: includeTemplate=' + includeTemplate + ', templateRowCount=' + templateRowCount + ', 总行数=' + rows.length + ', 首行预览=' + (rows.length > 0 ? JSON.stringify((rows[0]||[]).slice(0,3)) : '无'));
 
   return { rows: rows, linkStarts: linkStarts, templateRowCount: templateRowCount, headerRowIdx: -1 };
 }
@@ -2501,7 +2672,7 @@ async function refreshPreview() {
     container.innerHTML = '<div class="empty-state" style="padding:20px"><p>⏳ 正在生成预览…</p></div>';
     await new Promise(function(r){ setTimeout(r, 30); });
 
-    var result = buildExportData();
+    var result = buildExportData(true); // 预览需要包含模板行
     var rows = result.rows;
     var linkStarts = result.linkStarts;
     var templateRowCount = result.templateRowCount;
@@ -2641,35 +2812,63 @@ async function refreshPreview() {
 // =============================================
 async function exportExcelWithTemplate() {
   const platform = state.platform;
-  const config = state.templates[platform]?.config;
+  const tpl = state.templates[platform];
+  const config = tpl?.config;
   if (!config) { showToast('请先配置模板写入参数（目标Sheet+起始行）', 'warn'); return false; }
   
-  // 1. 获取模板原始数据
+  console.log('📤 exportExcelWithTemplate: config=', JSON.stringify(config), 'platform=', platform);
+  console.log('📤 state.templates[' + platform + '] keys:', tpl ? Object.keys(tpl).join(', ') : 'null');
+  console.log('📤 rawData type:', tpl && tpl.rawData ? (Array.isArray(tpl.rawData) ? 'Array(' + tpl.rawData.length + ')' : typeof tpl.rawData) : 'null');
+  
+  // 1. 获取模板原始 ArrayBuffer
   const rawData = await getTemplateRawData(platform);
   if (!rawData) { showToast('模板文件已丢失，请重新导入模板', 'error'); return false; }
+  console.log('📤 getTemplateRawData 返回:', rawData.byteLength, 'bytes');
   
-  // 2. 解析模板（所有 sheet）
-  let wb;
+  // 2. 检查 ExcelJS 库
+  if (typeof ExcelJS === 'undefined') {
+    // 回退到 XLSX（仅保留数据，格式会丢失）
+    showToast('ExcelJS 库加载失败，将使用备用方式导出（格式可能不保留）', 'warn');
+    return exportExcelWithTemplateFallback();
+  }
+  
+  showToast('正在加载模板（保留全部格式）…', 'info');
+  
+  // 3. 使用 ExcelJS 加载模板（完整保留所有格式、公式、合并单元格、隐藏行、列宽等）
+  let workbook;
   try {
-    wb = XLSX.read(new Uint8Array(rawData), { type: 'array', cellDates: true, cellStyles: true });
+    workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(rawData);
+    console.log('📤 ExcelJS 加载成功, Sheet 数量:', workbook.worksheets.length);
+    workbook.worksheets.forEach(function(ws, i) {
+      console.log('📤   Sheet[' + i + ']:', ws.name, 'rows:', ws.rowCount, 'cols:', ws.columnCount);
+    });
   } catch(e) {
-    showToast('模板文件解析失败：' + (e.message||e), 'error'); return false;
+    console.error('ExcelJS 加载模板失败:', e);
+    showToast('ExcelJS 解析模板失败，尝试备用方式…', 'warn');
+    return exportExcelWithTemplateFallback();
   }
   
-  // 3. 找到目标 sheet
-  let targetSheet = wb.Sheets[config.sheetName];
-  if (!targetSheet) {
-    // 找不到指定的 sheet，用第一个
-    targetSheet = wb.Sheets[wb.SheetNames[0]];
-    showToast('未找到 Sheet【' + config.sheetName + '】，改用【' + wb.SheetNames[0] + '】', 'warn');
+  // 4. 找到目标 sheet
+  let worksheet = workbook.getWorksheet(config.sheetName);
+  if (!worksheet) {
+    worksheet = workbook.worksheets[0];
+    showToast('未找到 Sheet【' + config.sheetName + '】，改用【' + (worksheet ? worksheet.name : 'Sheet1') + '】', 'warn');
   }
+  if (!worksheet) { showToast('工作簿中无可用 Sheet', 'error'); return false; }
   
-  // 4. 构建纯数据行（不含模板行）
+  // 5. 构建纯数据行（不含模板行）
   showToast('正在生成导出数据…', 'info');
   const result = buildExportData(false);
-  const dataRows = result.rows; // 纯数据行
+  const dataRows = result.rows;
+  console.log('📤 buildExportData(false):', dataRows.length, '行, 首行:',
+    dataRows.length > 0 ? JSON.stringify(dataRows[0].slice(0, 3)) : '无数据');
   
-  // 5. 处理图片上传（获取 URL）
+  if (!dataRows || !dataRows.length) {
+    showToast('无数据可导出', 'warn'); return false;
+  }
+  
+  // 6. 处理图片上传（获取 URL）
   let imgCells = [];
   for (let ri = 0; ri < dataRows.length; ri++) {
     const row = dataRows[ri];
@@ -2702,42 +2901,140 @@ async function exportExcelWithTemplate() {
     imgCells.forEach(cell => { dataRows[cell.ri][cell.ci] = '[图片:图床未连接]'; });
   }
   
-  // 6. 将数据写入目标 sheet（从 dataStartRow-1 行开始，0索引）
-  const startRow = (config.dataStartRow || 6) - 1;
-  showToast('正在写入数据到模板【' + config.sheetName + '】第 ' + (startRow+1) + ' 行…', 'info');
+  // 7. 将数据写入模板 sheet（保留模板原有的一切格式）
+  // ExcelJS 行/列是 1-indexed
+  const startRow = config.dataStartRow || 6;
+  const realSheetName = worksheet.name;
+  showToast('正在写入数据到模板【' + realSheetName + '】第 ' + startRow + ' 行…', 'info');
+
+  // 7a. 先清除模板原有数据区域（避免模板中第7-11行的"'选填'/'必填'/'分类'"等内容残留）
+  // 清除范围：从 startRow 开始，覆盖数据行 + 额外的模板行（至少覆盖到模板末尾）
+  var dataMaxCol = dataRows.length > 0 ? dataRows[0].length : 0;
+  var templateColCount = Math.max(worksheet.columnCount || 0, dataMaxCol, 20);
+  var templateLastRow = worksheet.rowCount || 0;
+  var clearEndRow = Math.max(startRow + dataRows.length - 1, templateLastRow);
+  console.log('📤 清除模板数据区域: ' + startRow + '行~' + clearEndRow + '行, ' + templateColCount + '列, templateLastRow=' + templateLastRow);
+  for (let cr = startRow; cr <= clearEndRow; cr++) {
+    for (let cc = 1; cc <= templateColCount; cc++) {
+      const cell = worksheet.getCell(cr, cc);
+      // 如果单元格有值（说明是模板原来的内容），清除它
+      if (cell.value !== null && cell.value !== undefined) {
+        cell.value = null;
+      }
+    }
+  }
+
+  // 7b. 写入产品数据
+  for (let ri = 0; ri < dataRows.length; ri++) {
+    const row = dataRows[ri];
+    const excelRow = startRow + ri; // 1-indexed
+    for (let ci = 0; ci < row.length; ci++) {
+      const excelCol = ci + 1; // 1-indexed
+      const cell = worksheet.getCell(excelRow, excelCol);
+      // 只修改值，保留原有格式（字体、颜色、边框、对齐等）
+      cell.value = (row[ci] != null && row[ci] !== '') ? row[ci] : null;
+    }
+  }
   
-  // 获取目标 sheet 的范围
-  const range = XLSX.utils.decode_range(targetSheet['!ref'] || XLSX.utils.encode_range({s:{c:0,r:0},e:{c:0,r:0}}));
+  // 8. 导出整个工作簿（所有 Sheet、所有格式完整保留）
+  showToast('正在生成 Excel 文件（保留全部格式）…', 'info');
+  let buffer;
+  try {
+    buffer = await workbook.xlsx.writeBuffer();
+    console.log('📤 writeBuffer 成功, 大小:', buffer.byteLength, 'bytes, Sheets:', workbook.worksheets.length);
+  } catch(e) {
+    console.error('ExcelJS 写入失败:', e);
+    showToast('Excel 生成失败，尝试备用方式…', 'warn');
+    return exportExcelWithTemplateFallback();
+  }
+  
+  const pNames = { shopee:'Shopee', lazada:'Lazada', tiktok:'TikTok' };
+  const timestamp = new Date().toLocaleDateString('zh-CN').split('/').join('-');
+  const filename = pNames[platform] + '_批量上架_' + timestamp + '.xlsx';
+  
+  // 触发下载
+  const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  
+  showToast('导出成功（全部格式保留，含 ' + workbook.worksheets.length + ' 个 Sheet）：' + filename, 'success');
+  return true;
+}
+
+// 备用导出（XLSX 方式，无格式保留，仅保留数据）
+async function exportExcelWithTemplateFallback() {
+  const platform = state.platform;
+  const config = state.templates[platform]?.config;
+  const rawData = await getTemplateRawData(platform);
+  if (!rawData) { showToast('模板文件已丢失', 'error'); return false; }
+  
+  let wb;
+  try {
+    wb = XLSX.read(new Uint8Array(rawData), { type: 'array' });
+  } catch(e) {
+    showToast('模板文件解析失败：' + (e.message||e), 'error'); return false;
+  }
+  
+  let targetSheet = wb.Sheets[config.sheetName];
+  if (!targetSheet) {
+    targetSheet = wb.Sheets[wb.SheetNames[0]];
+  }
+  
+  const result = buildExportData(false);
+  const dataRows = result.rows;
+  
+  // 图片处理（简化版）
+  if (sb) {
+    for (let ri = 0; ri < dataRows.length; ri++) {
+      for (let ci = 0; ci < (dataRows[ri]||[]).length; ci++) {
+        if (typeof dataRows[ri][ci] === 'string' && dataRows[ri][ci].startsWith('data:image')) {
+          try {
+            const url = await uploadImageToStorage(dataRows[ri][ci], 'img_' + ri + '_' + ci + '.jpg');
+            dataRows[ri][ci] = url || '[图片:上传失败]';
+          } catch(e) { dataRows[ri][ci] = '[图片:上传失败]'; }
+        }
+      }
+    }
+  }
+  
+  const startRow = (config.dataStartRow || 6) - 1;
+  const range = XLSX.utils.decode_range(targetSheet['!ref'] || 'A1');
   
   dataRows.forEach((row, ri) => {
     row.forEach((cellVal, ci) => {
       const cellRef = XLSX.utils.encode_cell({ r: startRow + ri, c: ci });
       if (!targetSheet[cellRef]) targetSheet[cellRef] = {};
       targetSheet[cellRef].v = cellVal != null ? cellVal : '';
-      targetSheet[cellRef].t = 's'; // 字符串类型
+      targetSheet[cellRef].t = 's';
     });
   });
   
-  // 更新 sheet 范围
   range.e.r = Math.max(range.e.r, startRow + dataRows.length - 1);
   range.e.c = Math.max(range.e.c, (dataRows[0]||[]).length - 1);
   targetSheet['!ref'] = XLSX.utils.encode_range(range);
   
-  // 7. 导出整个工作簿（保留所有 sheet）
-  showToast('正在生成 Excel 文件…', 'info');
   const pNames = { shopee:'Shopee', lazada:'Lazada', tiktok:'TikTok' };
   const timestamp = new Date().toLocaleDateString('zh-CN').split('/').join('-');
   const filename = pNames[platform] + '_批量上架_' + timestamp + '.xlsx';
   XLSX.writeFile(wb, filename);
   
-  showToast('导出成功（保留所有 Sheet）：' + filename, 'success');
+  showToast('导出成功（备用方式，格式可能不完整）：' + filename, 'warn');
   return true;
 }
 
 async function exportExcel() {
   // 新增：如果有模板文件，以模板为基底导出（保留所有 sheet）
   const tpl = state.templates[state.platform];
+  console.log('📤 exportExcel: tpl=', !!tpl, 'tpl.rawData=', !!(tpl && tpl.rawData),
+    'rawDataLen=', (tpl && tpl.rawData && tpl.rawData.length) || 0);
   if (tpl && tpl.rawData) {
+    console.log('📤 → 走 exportExcelWithTemplate 路径');
     await exportExcelWithTemplate();
     // 恢复按钮状态（在 exportExcelWithTemplate 中可能未恢复）
     var btnRestore = document.querySelector('#page-export-preview .btn-success');
@@ -2745,6 +3042,7 @@ async function exportExcel() {
     return; // 走新逻辑，不执行后续旧逻辑
   }
 
+  console.log('📤 → 不走模板路径，使用旧方式导出（单 sheet，无格式）');
   var btn = document.querySelector('#page-export-preview .btn-success');
   if (btn) { btn.disabled = true; btn.textContent = '导出中...'; }
   try {
@@ -2755,7 +3053,7 @@ async function exportExcel() {
     if (typeof XLSX === 'undefined') { showToast('Excel 组件加载失败，请刷新页面', 'error'); return; }
 
     showToast('正在生成导出数据…', 'info');
-    var result = buildExportData();
+    var result = buildExportData(false); // 导出不需要模板行
     var rows = result.rows;
 
     // 收集图片单元格（跳过模板行）
@@ -2958,7 +3256,492 @@ function escHtml(str) {
 // =============================================
 // 初始化
 // =============================================
+// =============================================
+// 图片批量去水印
+// =============================================
+var wmState = {
+  images: [],       // { id, file, name, dataUrl, width, height, canvas, ctx, maskData, processed }
+  nextId: 1
+};
+
+// 文件选择
+function handleWmFileSelect(input) {
+  if (!input.files || !input.files.length) return;
+  addWmImages(Array.from(input.files));
+  input.value = '';
+}
+
+// 拖拽支持
+function setupWmDragDrop() {
+  var grid = document.getElementById('wmImageGrid');
+  if (!grid) return;
+  grid.addEventListener('dragover', function(e) { e.preventDefault(); grid.style.outline = '2px dashed var(--pri)'; });
+  grid.addEventListener('dragleave', function() { grid.style.outline = ''; });
+  grid.addEventListener('drop', function(e) {
+    e.preventDefault(); grid.style.outline = '';
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      addWmImages(Array.from(e.dataTransfer.files));
+    }
+  });
+}
+
+// 添加图片
+function addWmImages(files) {
+  var imgFiles = files.filter(function(f) { return f.type.startsWith('image/'); });
+  if (!imgFiles.length) { showToast('请选择图片文件', 'warn'); return; }
+  showToast('正在加载 ' + imgFiles.length + ' 张图片…', 'info');
+  var loaded = 0;
+  imgFiles.forEach(function(file) {
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      var img = new Image();
+      img.onload = function() {
+        var id = wmState.nextId++;
+        var canvas = document.createElement('canvas');
+        // 限制最大显示尺寸
+        var maxW = 600, maxH = 500;
+        var scale = Math.min(maxW / img.width, maxH / img.height, 1);
+        canvas.width = img.width;
+        canvas.height = img.height;
+        var ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+
+        // 创建遮罩层（与图片同尺寸）
+        var maskCanvas = document.createElement('canvas');
+        maskCanvas.width = img.width;
+        maskCanvas.height = img.height;
+
+        wmState.images.push({
+          id: id,
+          file: file,
+          name: file.name,
+          dataUrl: e.target.result,
+          width: img.width,
+          height: img.height,
+          canvas: canvas,
+          maskCanvas: maskCanvas,
+          processed: false,
+          processedUrl: null
+        });
+        loaded++;
+        if (loaded === imgFiles.length) {
+          renderWmGrid();
+          updateWmButtons();
+          showToast('已加载 ' + wmState.images.length + ' 张图片', 'success');
+        }
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+// 渲染图片网格
+function renderWmGrid() {
+  var grid = document.getElementById('wmImageGrid');
+  var emptyEl = document.getElementById('wmEmptyState');
+  if (!wmState.images.length) {
+    if (emptyEl) emptyEl.style.display = '';
+    // 移除旧的图片卡片
+    grid.querySelectorAll('.wm-card').forEach(function(c) { c.remove(); });
+    return;
+  }
+  if (emptyEl) emptyEl.style.display = 'none';
+
+  // 保留已有卡片，只更新新增的
+  grid.querySelectorAll('.wm-card').forEach(function(c) { c.remove(); });
+
+  wmState.images.forEach(function(item, idx) {
+    var displayW = Math.min(item.width, 300);
+    var displayH = Math.round(item.height * (displayW / item.width));
+
+    var card = document.createElement('div');
+    card.className = 'wm-card card';
+    card.style.cssText = 'overflow:hidden;position:relative';
+    card.dataset.wmId = item.id;
+
+    var header = document.createElement('div');
+    header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--border);font-size:.78rem;background:var(--bg)';
+    header.innerHTML = '<span style="font-weight:600;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escHtml(item.name) + '">' + (item.processed ? '✅ ' : '📷 ') + escHtml(item.name) + '</span>'
+      + '<span style="color:var(--muted)">' + item.width + '×' + item.height + '</span>';
+    card.appendChild(header);
+
+    var body = document.createElement('div');
+    body.style.cssText = 'position:relative;display:flex;justify-content:center;background:#f0f0f0';
+
+    // 显示用的 canvas（缩放后的预览）
+    var previewCanvas = document.createElement('canvas');
+    previewCanvas.width = displayW;
+    previewCanvas.height = displayH;
+    previewCanvas.style.cssText = 'display:block;max-width:100%;cursor:crosshair';
+    previewCanvas.dataset.wmId = item.id;
+    previewCanvas.dataset.wmIdx = idx;
+
+    // 绘制预览（含遮罩层叠加）
+    drawWmPreview(previewCanvas, item, displayW, displayH);
+
+    // 绘制事件
+    setupWmDrawing(previewCanvas, item, idx);
+
+    body.appendChild(previewCanvas);
+    card.appendChild(body);
+    grid.appendChild(card);
+  });
+}
+
+// 绘制预览（图片 + 半透明红色遮罩）
+function drawWmPreview(previewCanvas, item, displayW, displayH) {
+  var ctx = previewCanvas.getContext('2d');
+  ctx.clearRect(0, 0, displayW, displayH);
+  // 绘制原图（缩放）
+  ctx.drawImage(item.canvas, 0, 0, displayW, displayH);
+  // 叠加半透明红色遮罩
+  var maskCtx = item.maskCanvas.getContext('2d');
+  var maskData = maskCtx.getImageData(0, 0, item.width, item.height);
+  // 创建临时 canvas 来缩放遮罩
+  var tmpCanvas = document.createElement('canvas');
+  tmpCanvas.width = item.width;
+  tmpCanvas.height = item.height;
+  var tmpCtx = tmpCanvas.getContext('2d');
+  tmpCtx.putImageData(maskData, 0, 0);
+  ctx.globalAlpha = 0.45;
+  ctx.drawImage(tmpCanvas, 0, 0, displayW, displayH);
+  ctx.globalAlpha = 1;
+}
+
+// 设置鼠标绘制水印区域
+function setupWmDrawing(previewCanvas, item, idx) {
+  var isDrawing = false;
+  var startX, startY;
+
+  previewCanvas.addEventListener('mousedown', function(e) {
+    var rect = previewCanvas.getBoundingClientRect();
+    var scaleX = item.width / rect.width;
+    var scaleY = item.height / rect.height;
+    startX = (e.clientX - rect.left) * scaleX;
+    startY = (e.clientY - rect.top) * scaleY;
+    isDrawing = true;
+    e.preventDefault();
+  });
+
+  previewCanvas.addEventListener('mousemove', function(e) {
+    if (!isDrawing) return;
+    var rect = previewCanvas.getBoundingClientRect();
+    var scaleX = item.width / rect.width;
+    var scaleY = item.height / rect.height;
+    var curX = (e.clientX - rect.left) * scaleX;
+    var curY = (e.clientY - rect.top) * scaleY;
+    // 实时预览
+    var displayW = previewCanvas.width;
+    var displayH = previewCanvas.height;
+    drawWmPreview(previewCanvas, item, displayW, displayH);
+    // 绘制当前选框
+    var ctx = previewCanvas.getContext('2d');
+    var rx = Math.min(startX, curX) * displayW / item.width;
+    var ry = Math.min(startY, curY) * displayH / item.height;
+    var rw = Math.abs(curX - startX) * displayW / item.width;
+    var rh = Math.abs(curY - startY) * displayH / item.height;
+    ctx.strokeStyle = '#ff0000';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([5, 3]);
+    ctx.strokeRect(rx, ry, rw, rh);
+    ctx.setLineDash([]);
+  });
+
+  previewCanvas.addEventListener('mouseup', function(e) {
+    if (!isDrawing) return;
+    isDrawing = false;
+    var rect = previewCanvas.getBoundingClientRect();
+    var scaleX = item.width / rect.width;
+    var scaleY = item.height / rect.height;
+    var endX = (e.clientX - rect.left) * scaleX;
+    var endY = (e.clientY - rect.top) * scaleY;
+    var x = Math.round(Math.min(startX, endX));
+    var y = Math.round(Math.min(startY, endY));
+    var w = Math.round(Math.abs(endX - startX));
+    var h = Math.round(Math.abs(endY - startY));
+    if (w < 5 || h < 5) {
+      // 太小忽略
+      drawWmPreview(previewCanvas, item, previewCanvas.width, previewCanvas.height);
+      return;
+    }
+    // 绘制到遮罩
+    var maskCtx = item.maskCanvas.getContext('2d');
+    maskCtx.fillStyle = '#ff0000';
+    maskCtx.fillRect(x, y, w, h);
+    // 刷新预览
+    drawWmPreview(previewCanvas, item, previewCanvas.width, previewCanvas.height);
+  });
+
+  previewCanvas.addEventListener('mouseleave', function() {
+    if (isDrawing) {
+      isDrawing = false;
+      drawWmPreview(previewCanvas, item, previewCanvas.width, previewCanvas.height);
+    }
+  });
+
+  // 右键清除遮罩
+  previewCanvas.addEventListener('contextmenu', function(e) {
+    e.preventDefault();
+    var maskCtx = item.maskCanvas.getContext('2d');
+    maskCtx.clearRect(0, 0, item.width, item.height);
+    item.processed = false;
+    item.processedUrl = null;
+    drawWmPreview(previewCanvas, item, previewCanvas.width, previewCanvas.height);
+    updateWmButtons();
+    showToast('已清除「' + item.name + '」的水印标记', 'info');
+  });
+}
+
+// 批量去水印（内容感知填充算法）
+function batchRemoveWatermark() {
+  var hasMask = false;
+  wmState.images.forEach(function(item) {
+    var maskCtx = item.maskCanvas.getContext('2d');
+    var maskData = maskCtx.getImageData(0, 0, item.width, item.height);
+    for (var i = 3; i < maskData.data.length; i += 4) {
+      if (maskData.data[i] > 0) { hasMask = true; break; }
+    }
+  });
+  if (!hasMask) { showToast('请先在图片上框选水印区域', 'warn'); return; }
+
+  showToast('正在处理 ' + wmState.images.length + ' 张图片…', 'info');
+  var processed = 0;
+
+  // 使用 setTimeout 分批处理避免阻塞 UI
+  function processNext(startIdx) {
+    var endIdx = Math.min(startIdx + 3, wmState.images.length);
+    for (var i = startIdx; i < endIdx; i++) {
+      var item = wmState.images[i];
+      // 检查是否有遮罩
+      var maskCtx = item.maskCanvas.getContext('2d');
+      var maskData = maskCtx.getImageData(0, 0, item.width, item.height);
+      var hasMaskPixels = false;
+      for (var j = 3; j < maskData.data.length; j += 4) {
+        if (maskData.data[j] > 0) { hasMaskPixels = true; break; }
+      }
+      if (!hasMaskPixels) {
+        item.processed = false;
+        item.processedUrl = null;
+        processed++;
+        continue;
+      }
+      // 执行 inpainting
+      var srcCtx = item.canvas.getContext('2d');
+      var srcData = srcCtx.getImageData(0, 0, item.width, item.height);
+      var result = inpaintImage(srcData, maskData, item.width, item.height);
+      // 写回 canvas
+      var resultCanvas = document.createElement('canvas');
+      resultCanvas.width = item.width;
+      resultCanvas.height = item.height;
+      var resultCtx = resultCanvas.getContext('2d');
+      resultCtx.putImageData(result, 0, 0);
+      item.processedUrl = resultCanvas.toDataURL('image/png');
+      item.processed = true;
+      processed++;
+    }
+    if (endIdx < wmState.images.length) {
+      setTimeout(function() { processNext(endIdx); }, 50);
+    } else {
+      // 全部完成
+      renderWmGrid();
+      updateWmButtons();
+      showToast('去水印完成！共处理 ' + processed + ' 张图片', 'success');
+    }
+  }
+  processNext(0);
+}
+
+// 内容感知填充算法
+function inpaintImage(srcData, maskData, width, height) {
+  // 创建结果数据（复制原图）
+  var result = new ImageData(
+    new Uint8ClampedArray(srcData.data),
+    width,
+    height
+  );
+
+  var src = srcData.data;
+  var dst = result.data;
+  var mask = maskData.data;
+  var searchRadius = Math.max(12, Math.min(40, Math.floor(Math.min(width, height) * 0.08)));
+
+  // 收集所有需要填充的像素坐标
+  var fillPixels = [];
+  for (var y = 0; y < height; y++) {
+    for (var x = 0; x < width; x++) {
+      var idx = (y * width + x) * 4;
+      if (mask[idx + 3] > 0) {
+        fillPixels.push({ x: x, y: y, idx: idx });
+      }
+    }
+  }
+
+  if (fillPixels.length === 0) return result;
+
+  // 按距离边缘排序（先填充边缘像素，逐步向内）
+  fillPixels.sort(function(a, b) {
+    var distA = distanceToEdge(a.x, a.y, mask, width, height);
+    var distB = distanceToEdge(b.x, b.y, mask, width, height);
+    return distA - distB;
+  });
+
+  // 逐像素填充
+  for (var pi = 0; pi < fillPixels.length; pi++) {
+    var p = fillPixels[pi];
+    var idx = p.idx;
+
+    // 搜索周围非遮罩像素
+    var rSum = 0, gSum = 0, bSum = 0, weightSum = 0;
+
+    for (var dy = -searchRadius; dy <= searchRadius; dy++) {
+      for (var dx = -searchRadius; dx <= searchRadius; dx++) {
+        var nx = p.x + dx;
+        var ny = p.y + dy;
+        if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+        var nIdx = (ny * width + nx) * 4;
+        // 跳过遮罩区域内的像素
+        if (mask[nIdx + 3] > 0) continue;
+        // 距离权重
+        var dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < 1) dist = 1;
+        var weight = 1 / (dist * dist);
+        // 颜色差异权重（与邻域已填充像素比较）
+        var colorDiff = 1;
+        if (pi > 0) {
+          // 如果在结果中已有填充像素，做简单的颜色连续性检查
+          var neighborCount = 0;
+          var avgR = 0, avgG = 0, avgB = 0;
+          for (var ndy = -1; ndy <= 1; ndy++) {
+            for (var ndx = -1; ndx <= 1; ndx++) {
+              if (ndx === 0 && ndy === 0) continue;
+              var nnx = p.x + ndx;
+              var nny = p.y + ndy;
+              if (nnx < 0 || nnx >= width || nny < 0 || nny >= height) continue;
+              var nnIdx = (nny * width + nnx) * 4;
+              if (mask[nnIdx + 3] === 0) {
+                avgR += dst[nnIdx];
+                avgG += dst[nnIdx + 1];
+                avgB += dst[nnIdx + 2];
+                neighborCount++;
+              }
+            }
+          }
+          if (neighborCount > 0) {
+            avgR /= neighborCount; avgG /= neighborCount; avgB /= neighborCount;
+            var dr = dst[nIdx] - avgR, dg = dst[nIdx + 1] - avgG, db = dst[nIdx + 2] - avgB;
+            colorDiff = 1 / (1 + Math.sqrt(dr*dr + dg*dg + db*db) / 50);
+          }
+        }
+        weight *= colorDiff;
+        rSum += dst[nIdx] * weight;
+        gSum += dst[nIdx + 1] * weight;
+        bSum += dst[nIdx + 2] * weight;
+        weightSum += weight;
+      }
+    }
+
+    if (weightSum > 0) {
+      dst[idx] = Math.round(rSum / weightSum);
+      dst[idx + 1] = Math.round(gSum / weightSum);
+      dst[idx + 2] = Math.round(bSum / weightSum);
+      dst[idx + 3] = 255;
+      // 标记为已填充（用于后续像素的搜索）
+      mask[idx + 3] = 0;
+    }
+  }
+
+  return result;
+}
+
+// 计算像素到最近边缘的距离
+function distanceToEdge(x, y, mask, width, height) {
+  var minDist = Infinity;
+  var searchR = 15;
+  for (var dy = -searchR; dy <= searchR; dy++) {
+    for (var dx = -searchR; dx <= searchR; dx++) {
+      if (dx === 0 && dy === 0) continue;
+      var nx = x + dx, ny = y + dy;
+      if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+      var idx = (ny * width + nx) * 4;
+      if (mask[idx + 3] === 0) {
+        var dist = Math.sqrt(dx*dx + dy*dy);
+        if (dist < minDist) minDist = dist;
+      }
+    }
+  }
+  return minDist === Infinity ? 999 : minDist;
+}
+
+// 导出图片（命名规则：原名+(序号)）
+function exportWmImages() {
+  var hasProcessed = false;
+  wmState.images.forEach(function(item) { if (item.processed) hasProcessed = true; });
+  if (!hasProcessed) { showToast('请先执行"批量去水印"', 'warn'); return; }
+
+  var exportCount = 0;
+  var nameCount = {}; // 跟踪同名文件的序号
+
+  wmState.images.forEach(function(item, idx) {
+    if (!item.processed || !item.processedUrl) return;
+
+    // 解析原文件名（去掉扩展名）
+    var dotIdx = item.name.lastIndexOf('.');
+    var baseName = dotIdx > 0 ? item.name.substring(0, dotIdx) : item.name;
+    var ext = dotIdx > 0 ? item.name.substring(dotIdx) : '.png';
+
+    // 若同个 baseName 出现多次，加序号
+    if (!nameCount[baseName]) nameCount[baseName] = 0;
+    nameCount[baseName]++;
+    var seq = nameCount[baseName];
+    var newName = baseName + '(' + seq + ')' + ext;
+
+    // 触发下载
+    var a = document.createElement('a');
+    a.href = item.processedUrl;
+    a.download = newName;
+    document.body.appendChild(a);
+    // 延迟一点点避免浏览器阻止多个下载
+    setTimeout(function() {
+      a.click();
+      document.body.removeChild(a);
+    }, exportCount * 300);
+    exportCount++;
+  });
+
+  if (exportCount === 0) {
+    showToast('没有可导出的图片', 'warn');
+  } else {
+    showToast('正在导出 ' + exportCount + ' 张图片（命名规则：原名+序号）…', 'success');
+  }
+}
+
+// 清空所有
+function clearWmAll() {
+  if (!wmState.images.length) return;
+  wmState.images = [];
+  renderWmGrid();
+  updateWmButtons();
+  showToast('已清空所有图片', 'info');
+}
+
+// 更新按钮状态
+function updateWmButtons() {
+  var hasImages = wmState.images.length > 0;
+  var hasProcessed = false;
+  wmState.images.forEach(function(item) { if (item.processed) hasProcessed = true; });
+  document.getElementById('wmProcessBtn').disabled = !hasImages;
+  document.getElementById('wmExportBtn').disabled = !hasProcessed;
+  document.getElementById('wmClearBtn').disabled = !hasImages;
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
+  // 检查 ExcelJS 是否加载成功
+  console.log('🔍 ExcelJS 加载状态:', typeof ExcelJS !== 'undefined' ? '✅ 已加载 (v' + (ExcelJS.Workbook ? 'OK' : 'partial') + ')' : '❌ 未加载');
+  if (typeof ExcelJS === 'undefined') {
+    console.warn('⚠️ ExcelJS 未加载，导出将使用 XLSX 备用方式（格式可能不保留）');
+  }
+  
   // 显示加载状态
   showToast(sb ? '正在从云端加载数据…' : '云端未连接，使用离线模式', 'info');
   await loadDraft();
@@ -2967,6 +3750,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('uploadZone').addEventListener('click', () => {
     document.getElementById('templateFile').click();
   });
+  // 设置去水印页面的拖拽上传
+  setupWmDragDrop();
   // 设置初始同步状态
   setSyncStatus(sb ? 'idle' : 'offline');
 });
