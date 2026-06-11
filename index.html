@@ -3,6 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
   <title>跨境电商批量上架工具</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"
     onerror="var s=document.createElement('script');s.src='https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js';document.head.appendChild(s);"></script>
@@ -622,6 +625,8 @@ const MAX_IMG_PER_GROUP = 9;
 
 // =============================================
 // Supabase 初始化（容错：CDN 加载失败不影响核心功能）
+// =============================================
+console.log('🛠 批量上架工具 V16 | 2026-06-11 | 预览仅显示模板第3行 | 导出第6行=数据');
 // =============================================
 const SUPABASE_URL = 'https://khrppyhcjzkkokyhnhhd.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtocnBweWhjanpra29reWhuaGhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwNzY1NDEsImV4cCI6MjA5NjY1MjU0MX0.uS9YablBNwjUmQlwRbLRw3SEPNgEnO1Uc6Poe1SeB88';
@@ -2118,6 +2123,8 @@ function buildExportData() {
     templateRowCount = alignedRows.length;
   }
 
+  console.log('buildExportData rows结构: templateRowCount=' + templateRowCount + ', 总行数=' + rows.length + ', 第' + templateRowCount + '行(索引)=' + (rows[templateRowCount] ? rows[templateRowCount].slice(0,3).join('|') : '(无)'));
+
   return { rows: rows, linkStarts: linkStarts, templateRowCount: templateRowCount, headerRowIdx: -1 };
 }
 
@@ -2159,34 +2166,29 @@ async function refreshPreview() {
     var colCount = rows[0] ? rows[0].length : 0;
 
     var info = '共 ' + products.length + ' 个产品，' + totalLinks + ' 个链接，' + dataRowCount + ' 行数据，' + colCount + ' 列';
-    if (templateRowCount > 0) info += '（前' + templateRowCount + '行为模板表头）';
+    if (templateRowCount > 0) info += '（以模板第' + (templateRowCount >= 3 ? '3' : '' + templateRowCount) + '行为表头）';
     document.getElementById('previewInfo').textContent = info;
 
     // 构建表格
     var table = document.createElement('table');
 
-    // thead = 字段名行（仅当 headerRowIdx >= 0 时）
-    if (headerRowIdx >= 0 && rows.length > headerRowIdx) {
-      var thead = document.createElement('thead');
-      var hr = document.createElement('tr');
-      rows[headerRowIdx].forEach(function(h) {
-        var th = document.createElement('th'); th.textContent = h; hr.appendChild(th);
-      });
-      thead.appendChild(hr); table.appendChild(thead);
-    }
-
     var tbody = document.createElement('tbody');
 
-    // 模板行：蓝色底色
-    for (var ti = 0; ti < templateRowCount && ti < rows.length; ti++) {
-      var tr = document.createElement('tr');
-      tr.style.cssText = 'background:#f0f5ff;font-size:.78rem;color:var(--muted);';
-      rows[ti].forEach(function(cell) {
-        var td = document.createElement('td');
-        td.textContent = cell || '';
-        tr.appendChild(td);
+    // thead: 只取模板第3行（索引2）作为表头，其余模板行隐藏
+    // 如果模板不足3行，使用最后一行
+    var headerRowForThead = null;
+    if (templateRowCount >= 3) {
+      headerRowForThead = rows[2]; // 取第3行
+    } else if (templateRowCount > 0) {
+      headerRowForThead = rows[templateRowCount - 1]; // 取最后一行
+    }
+    if (headerRowForThead) {
+      var thead = document.createElement('thead');
+      var hr = document.createElement('tr');
+      headerRowForThead.forEach(function(h) {
+        var th = document.createElement('th'); th.textContent = h || ''; hr.appendChild(th);
       });
-      tbody.appendChild(tr);
+      thead.appendChild(hr); table.appendChild(thead);
     }
 
     // 构建 linkStarts 的快速查找 Map: dataRowIdx → {title, dataUrl}
