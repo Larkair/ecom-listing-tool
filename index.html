@@ -9,52 +9,6 @@
   <title>跨境电商批量上架工具</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"
     onerror="var s=document.createElement('script');s.src='https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js';document.head.appendChild(s);">
-// =============================================
-// 从 localStorage 恢复模板文件和配置
-// =============================================
-function restoreTemplateFromLocalStorage() {
-  ['shopee','lazada','tiktok'].forEach(function(platform) {
-    const base64 = localStorage.getItem('tpl_raw_' + platform);
-    const sheetsStr = localStorage.getItem('tpl_sheets_' + platform);
-    const configStr = localStorage.getItem('tpl_config_' + platform);
-    
-    if (!base64 && !configStr) return; // 本平台无保存数据
-    
-    if (!state.templates[platform]) state.templates[platform] = {};
-    
-    // 恢复 rawData
-    if (base64) {
-      try {
-        const binary = atob(base64);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-        state.templates[platform].rawData = Array.from(bytes);
-      } catch(e) { console.warn('恢复模板文件失败(' + platform + '):', e.message); }
-    }
-    
-    // 恢复 sheetNames
-    if (sheetsStr) {
-      try {
-        state.templates[platform].sheetNames = JSON.parse(sheetsStr);
-      } catch(e) {}
-    }
-    
-    // 恢复 config
-    if (configStr) {
-      try {
-        state.templates[platform].config = JSON.parse(configStr);
-      } catch(e) {}
-    }
-    
-    // 如果当前平台有恢复，显示配置 UI
-    if (platform === state.platform && state.templates[platform].sheetNames) {
-      showTemplateConfigUI(state.templates[platform].sheetNames, state.templates[platform].config);
-    }
-  });
-  
-  console.log('模板恢复完成:', state.templates);
-}
-
 </script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"
     onerror="var s=document.createElement('script');s.src='https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.min.js';document.head.appendChild(s);"></script>
@@ -913,6 +867,51 @@ const state = {
   currentProductIdx: -1,
   settings: { maxTitleLen: 120, genCount: 5, titleSep: ' ' }
 };
+
+// 从 localStorage 恢复模板文件和配置
+// =============================================
+function restoreTemplateFromLocalStorage() {
+  ['shopee','lazada','tiktok'].forEach(function(platform) {
+    const base64 = localStorage.getItem('tpl_raw_' + platform);
+    const sheetsStr = localStorage.getItem('tpl_sheets_' + platform);
+    const configStr = localStorage.getItem('tpl_config_' + platform);
+    
+    if (!base64 && !configStr) return; // 本平台无保存数据
+    
+    if (!state.templates[platform]) state.templates[platform] = {};
+    
+    // 恢复 rawData
+    if (base64) {
+      try {
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        state.templates[platform].rawData = Array.from(bytes);
+      } catch(e) { console.warn('恢复模板文件失败(' + platform + '):', e.message); }
+    }
+    
+    // 恢复 sheetNames
+    if (sheetsStr) {
+      try {
+        state.templates[platform].sheetNames = JSON.parse(sheetsStr);
+      } catch(e) {}
+    }
+    
+    // 恢复 config
+    if (configStr) {
+      try {
+        state.templates[platform].config = JSON.parse(configStr);
+      } catch(e) {}
+    }
+    
+    // 如果当前平台有恢复，显示配置 UI
+    if (platform === state.platform && state.templates[platform].sheetNames) {
+      showTemplateConfigUI(state.templates[platform].sheetNames, state.templates[platform].config);
+    }
+  });
+  
+  console.log('模板恢复完成:', state.templates);
+}
 
 // =============================================
 // 平台切换
