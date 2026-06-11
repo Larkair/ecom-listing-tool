@@ -733,6 +733,43 @@
       </div>
     </div>
 
+    <!-- ====== 批量导出设置弹窗 ====== -->
+    <div class="modal-overlay" id="beExportModal">
+      <div class="modal" style="width:460px">
+        <div class="modal-header">
+          <div class="modal-title">💾 批量导出设置</div>
+          <button class="modal-close" onclick="closeBeExportModal()">×</button>
+        </div>
+        <div style="padding:4px 0">
+          <div class="form-group">
+            <label class="form-label">图片格式</label>
+            <select class="form-ctrl" id="beExportFormat">
+              <option value="image/png">PNG（无损，文件较大）</option>
+              <option value="image/jpeg">JPEG（有损压缩，文件小）</option>
+              <option value="image/webp">WebP（兼顾质量与体积）</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">图片大小限制</label>
+            <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+              <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:.85rem">
+                <input type="radio" name="beSizeLimit" value="none" checked onchange="toggleBeSizeInput()" /> 不限制大小
+              </label>
+              <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:.85rem">
+                <input type="radio" name="beSizeLimit" value="limit" onchange="toggleBeSizeInput()" /> 限制不超过
+              </label>
+              <input type="number" class="form-ctrl" id="beSizeLimitMB" value="1" min="0.1" max="20" step="0.1" style="width:80px" disabled /> <span style="font-size:.85rem">MB</span>
+            </div>
+            <p class="text-sm text-muted" style="margin-top:6px">选择限制后，系统会自动压缩图片使其接近但不超出限制</p>
+          </div>
+        </div>
+        <div style="margin-top:16px;text-align:right;display:flex;gap:8px;justify-content:flex-end">
+          <button class="btn btn-outline" onclick="closeBeExportModal()">取消</button>
+          <button class="btn btn-primary" onclick="doExportBeImages()">✅ 确认导出</button>
+        </div>
+      </div>
+    </div>
+
   </main>
 </div>
 
@@ -5146,37 +5183,152 @@ function beReset(idx) {
   showToast('已还原「' + item.name + '」', 'info');
 }
 
-// 批量导出
+// ========== 批量导出（V36: 格式选择 + 大小限制） ==========
+
+// 打开导出设置弹窗
 async function exportBeImages() {
   var hasEdited = false;
   beState.images.forEach(function(item) { if (item.edited) hasEdited = true; });
   if (!hasEdited) { showToast('请先对图片进行剪辑操作', 'warn'); return; }
 
+  // 重置弹窗默认值
+  document.getElementById('beExportFormat').value = 'image/png';
+  document.querySelector('input[name="beSizeLimit"][value="none"]').checked = true;
+  document.getElementById('beSizeLimitMB').value = '1';
+  document.getElementById('beSizeLimitMB').disabled = true;
+  document.getElementById('beExportModal').classList.add('open');
+}
+
+function closeBeExportModal() {
+  document.getElementById('beExportModal').classList.remove('open');
+}
+
+function toggleBeSizeInput() {
+  var limitRadio = document.querySelector('input[name="beSizeLimit"][value="limit"]');
+  document.getElementById('beSizeLimitMB').disabled = !limitRadio.checked;
+}
+
+// 获取导出文件扩展名
+function _beFormatExt(format) {
+  if (format === 'image/jpeg') return '.jpg';
+  if (format === 'image/webp') return '.webp';
+  return '.png';
+}
+
+// Canvas → Blob Promise
+function _canvasToBlob(canvas, format, quality) {
+  return new Promise(function(resolve, reject) {
+    canvas.toBlob(function(blob) {
+      if (blob) resolve(blob);
+      else reject(new Error('toBlob failed'));
+    }, format, quality);
+  });
+}
+
+// 缩放 Canvas
+function _resizeCanvas(canvas, scale) {
+  var c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(canvas.width * scale));
+  c.height = Math.max(1, Math.round(canvas.height * scale));
+  c.getContext('2d').drawImage(canvas, 0, 0, c.width, c.height);
+  return c;
+}
+
+// 智能压缩：使图片大小接近但不超过 maxBytes
+// 返回 { blob, quality, scale } 供调试
+async function _compressCanvasToSize(canvas, format, maxBytes) {
+  // 先试最高质量
+  var initQuality = format === 'image/png' ? undefined : 0.92;
+  var blob = await _canvasToBlob(canvas, format, initQuality);
+  if (blob.size <= maxBytes) return { blob: blob, quality: initQuality, scale: 1.0 };
+
+  // JPEG/WebP: 二分搜索最佳质量（0.01 ~ 0.92）
+  if (format !== 'image/png') {
+    var lo = 0.01, hi = 0.92;
+    for (var i = 0; i < 10; i++) {
+      var mid = (lo + hi) / 2;
+      var testBlob = await _canvasToBlob(canvas, format, mid);
+      if (testBlob.size <= maxBytes) {
+        lo = mid; // 可以接受，尝试更高质量
+      } else {
+        hi = mid; // 太大，降低质量
+      }
+    }
+    var finalBlob = await _canvasToBlob(canvas, format, lo);
+    return { blob: finalBlob, quality: lo, scale: 1.0 };
+  }
+
+  // PNG: 质量参数无效，逐步缩小尺寸
+  var scale = 1.0;
+  for (var j = 0; j < 10; j++) {
+    scale *= 0.82;
+    var resized = _resizeCanvas(canvas, scale);
+    var pngBlob = await _canvasToBlob(resized, 'image/png');
+    if (pngBlob.size <= maxBytes) return { blob: pngBlob, quality: undefined, scale: scale };
+  }
+  // 最终回退
+  var minCanvas = _resizeCanvas(canvas, 0.2);
+  var minBlob = await _canvasToBlob(minCanvas, 'image/png');
+  return { blob: minBlob, quality: undefined, scale: 0.2 };
+}
+
+// 确认导出
+async function doExportBeImages() {
+  closeBeExportModal();
+
+  var format = document.getElementById('beExportFormat').value;
+  var ext = _beFormatExt(format);
+  var limitRadio = document.querySelector('input[name="beSizeLimit"][value="limit"]');
+  var sizeLimitMB = limitRadio.checked ? parseFloat(document.getElementById('beSizeLimitMB').value) || 1 : 0;
+  var maxBytes = sizeLimitMB > 0 ? sizeLimitMB * 1024 * 1024 : 0;
+
   if (typeof JSZip === 'undefined') {
     showToast('JSZip 未加载，使用逐个下载模式', 'warn');
-    exportBeImagesFallback();
+    _exportBeImagesFallback(format, ext, maxBytes);
     return;
   }
+
+  showToast('正在压缩打包 ' + beState.images.length + ' 张图片…', 'info');
 
   var zip = new JSZip();
   var nameCount = {};
   var exportCount = 0;
+  var totalOriginal = 0, totalCompressed = 0;
 
-  beState.images.forEach(function(item, i) {
-    if (!item.edited || !item.editCanvas) return;
+  // 逐张处理（顺序执行，避免同时大量压缩卡顿）
+  for (var i = 0; i < beState.images.length; i++) {
+    var item = beState.images[i];
+    if (!item.edited || !item.editCanvas) continue;
+
     var dotIdx = item.name.lastIndexOf('.');
     var baseName = dotIdx > 0 ? item.name.substring(0, dotIdx) : item.name;
-    var ext = dotIdx > 0 ? item.name.substring(dotIdx) : '.png';
 
     if (!nameCount[baseName]) nameCount[baseName] = 0;
     nameCount[baseName]++;
     var newName = baseName + '(' + nameCount[baseName] + ')' + ext;
 
-    var dataUrl = item.editCanvas.toDataURL('image/png');
-    var base64Data = dataUrl.split(',')[1];
-    zip.file(newName, base64Data, { base64: true });
+    var canvas = item.editCanvas;
+    var blob;
+    if (maxBytes > 0) {
+      // 需要压缩
+      var result = await _compressCanvasToSize(canvas, format, maxBytes);
+      blob = result.blob;
+      totalOriginal += canvas.width * canvas.height;
+      totalCompressed += blob.size;
+    } else {
+      // 不限制大小，高质量导出
+      var quality = format === 'image/png' ? undefined : 0.92;
+      blob = await _canvasToBlob(canvas, format, quality);
+      totalOriginal += canvas.width * canvas.height;
+      totalCompressed += blob.size;
+    }
+
+    // 将 blob 转为 base64 加入 zip
+    var arrayBuffer = await blob.arrayBuffer();
+    var uint8 = new Uint8Array(arrayBuffer);
+    zip.file(newName, uint8, { binary: true });
     exportCount++;
-  });
+  }
 
   if (exportCount === 0) {
     showToast('没有可导出的图片', 'warn');
@@ -5184,29 +5336,29 @@ async function exportBeImages() {
   }
 
   try {
-    var blob = await zip.generateAsync({
-      type: 'blob',
-      compression: 'STORE'
-    });
+    var zipBlob = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
 
-    var url = URL.createObjectURL(blob);
+    var url = URL.createObjectURL(zipBlob);
     var a = document.createElement('a');
     a.href = url;
-    a.download = '剪辑图片_' + exportCount + '张.zip';
+    var fmtLabel = format.split('/')[1].toUpperCase();
+    var sizeLabel = maxBytes > 0 ? ('_≤' + sizeLimitMB + 'MB') : '';
+    a.download = '剪辑图片_' + fmtLabel + sizeLabel + '_' + exportCount + '张.zip';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
 
-    showToast('✅ 已打包导出 ' + exportCount + ' 张图片（单文件ZIP）', 'success');
+    var sizeInfo = maxBytes > 0 ? ('（≤' + sizeLimitMB + 'MB）') : '';
+    showToast('✅ 已打包导出 ' + exportCount + ' 张 ' + fmtLabel + ' 图片' + sizeInfo, 'success');
   } catch (err) {
     console.error('ZIP打包失败:', err);
-    exportBeImagesFallback();
+    _exportBeImagesFallback(format, ext, maxBytes);
   }
 }
 
 // 回退：逐个下载
-function exportBeImagesFallback() {
+function _exportBeImagesFallback(format, ext, maxBytes) {
   var exportCount = 0;
   var nameCount = {};
 
@@ -5215,14 +5367,15 @@ function exportBeImagesFallback() {
 
     var dotIdx = item.name.lastIndexOf('.');
     var baseName = dotIdx > 0 ? item.name.substring(0, dotIdx) : item.name;
-    var ext = dotIdx > 0 ? item.name.substring(dotIdx) : '.png';
 
     if (!nameCount[baseName]) nameCount[baseName] = 0;
     nameCount[baseName]++;
     var newName = baseName + '(' + nameCount[baseName] + ')' + ext;
 
+    // 逐个下载模式：用高质量导出（不压缩，避免卡顿）
+    var quality = format === 'image/png' ? undefined : 0.92;
     var a = document.createElement('a');
-    a.href = item.editCanvas.toDataURL('image/png');
+    a.href = item.editCanvas.toDataURL(format, quality);
     a.download = newName;
     document.body.appendChild(a);
     setTimeout(function() {
