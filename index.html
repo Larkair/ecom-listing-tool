@@ -926,24 +926,156 @@ function handleTemplateImport(input) {
   reader.onerror = () => { showToast('文件读取失败', 'error'); };
   reader.onload = (e) => {
     try {
+      const arrayBuffer = e.target.result;
       let data;
+      let wb;
       console.log('File loaded, parsing...');
       if (file.name.toLowerCase().endsWith('.csv')) {
-        const text = new TextDecoder('utf-8').decode(e.target.result);
-        const wb = XLSX.read(text, { type: 'string' });
+        const text = new TextDecoder('utf-8').decode(arrayBuffer);
+        wb = XLSX.read(text, { type: 'string' });
         data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1 });
       } else {
-        const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
+        wb = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' });
         data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1 });
       }
-      console.log('Parsed', data?.length, 'rows');
-      processTemplate(data, file.name);
+      console.log('Parsed', data?.length, 'rows, sheets:', wb.SheetNames);
+
+      // 保存完整模板文件（ArrayBuffer → 数组存 state，base64 存 localStorage）
+      const rawArray = Array.from(new Uint8Array(arrayBuffer));
+      const platform = state.platform;
+      const sheetNames = wb.SheetNames || ['Sheet1'];
+      // 默认配置：第一个 sheet，第6行开始
+      const defaultConfig = {
+        sheetName: sheetNames[0] || 'Sheet1',
+        dataStartRow: 6
+      };
+      state.templates[platform] = {
+        filename: file.name,
+        data: data,
+        fields: [],
+        rawData: rawArray,          // ArrayBuffer 转数组，存 state
+        sheetNames: sheetNames,
+        config: defaultConfig
+      };
+      // 存到 localStorage（base64 编码，避免 Array 转 JSON 太大）
+      try {
+        const base64 = btoa(String.fromCharCode.apply(null, rawArray));
+        localStorage.setItem('tpl_raw_' + platform, base64);
+        localStorage.setItem('tpl_sheets_' + platform, JSON.stringify(sheetNames));
+        localStorage.setItem('tpl_config_' + platform, JSON.stringify(defaultConfig));
+      } catch (lsErr) {
+        console.warn('localStorage 保存模板失败（可能超出大小限制）:', lsErr.message);
+      }
+
+      // 显示模板配置 UI
+      showTemplateConfigUI(sheetNames, defaultConfig);
+
+      processTemplate(data, file.name, wb);
     } catch (err) {
       console.error('Parse error:', err);
       showToast('文件解析失败：' + (err.message || err), 'error');
     }
   };
   reader.readAsArrayBuffer(file);
+}
+
+// 显示模板配置 UI（选择 sheet + 数据起始行）
+function showTemplateConfigUI(sheetNames, currentConfig) {
+  // 如果已存在配置卡片，先移除
+  const oldCard = document.getElementById('templateConfigCard');
+  if (oldCard) oldCard.remove();
+
+  const config = currentConfig || { sheetName: (sheetNames && sheetNames[0]) || 'Sheet1', dataStartRow: 6 };
+  const sheetOptions = (sheetNames || ['Sheet1']).map(function(name) {
+    return '<option value="' + escHtml(name) + '" ' + (name === config.sheetName ? 'selected' : '') + '>' + escHtml(name) + '</option>';
+  }).join('');
+
+  const cardHtml = `
+    <div id="templateConfigCard" class="card" style="margin-bottom:16px;border-left:4px solid #1677ff">
+      <h3 style="margin-bottom:12px;font-size:.95rem">⚙️ 模板写入配置</h3>
+      <div style="display:flex;gap:20px;align-items:flex-end;flex-wrap:wrap">
+        <div>
+          <label style="font-size:.82rem;color:var(--muted);display:block;margin-bottom:4px">写入目标 Sheet</label>
+          <select id="cfgSheetName" class="form-ctrl" style="min-width:160px" onchange="onTemplateConfigChange()">
+            ${sheetOptions}
+          </select>
+        </div>
+        <div>
+          <label style="font-size:.82rem;color:var(--muted);display:block;margin-bottom:4px">数据起始行（第几行开始写数据）</label>
+          <input id="cfgDataStartRow" type="number" class="form-ctrl" value="${config.dataStartRow}" min="1" max="100" style="width:90px" onchange="onTemplateConfigChange()" />
+        </div>
+        <div style="font-size:.78rem;color:var(--muted);padding-bottom:6px">
+          模板共 ${sheetNames.length} 个 Sheet：${(sheetNames || []).map(function(n,i){return '【'+(i+1)+'】'+n;}).join('、')}
+        </div>
+      </div>
+    </div>
+  `;
+
+  const uploadZone = document.getElementById('uploadZone');
+  if (uploadZone && uploadZone.parentNode) {
+    uploadZone.parentNode.insertBefore(createElementFromHtml(cardHtml), uploadZone.nextSibling);
+  }
+}
+
+function createElementFromHtml(html) {
+  const template = document.createElement('template');
+  template.innerHTML = html.trim();
+  return template.content.firstChild;
+}
+
+function onTemplateConfigChange() {
+  const platform = state.platform;
+  const sheetSelect = document.getElementById('cfgSheetName');
+  const rowInput = document.getElementById('cfgDataStartRow');
+  if (!sheetSelect || !rowInput) return;
+  const config = {
+    sheetName: sheetSelect.value,
+    dataStartRow: parseInt(rowInput.value) || 6
+  };
+  if (!state.templates[platform]) state.templates[platform] = {};
+  state.templates[platform].config = config;
+  // 存 localStorage
+  try {
+    localStorage.setItem('tpl_config_' + platform, JSON.stringify(config));
+  } catch(e) {}
+  debouncedSync();
+  showToast('模板写入配置已更新：写入【' + config.sheetName + '】第' + config.dataStartRow + '行', 'success');
+}
+
+// 加载模板配置（从 localStorage 或 state 恢复）
+function loadTemplateConfig(platform) {
+  try {
+    const saved = localStorage.getItem('tpl_config_' + platform);
+    if (saved) {
+      const config = JSON.parse(saved);
+      if (state.templates[platform]) {
+        state.templates[platform].config = config;
+      }
+      return config;
+    }
+  } catch(e) {}
+  return null;
+}
+
+// 读取保存的模板原始文件（优先 localStorage，其次 state）
+async function getTemplateRawData(platform) {
+  // 先试 localStorage
+  try {
+    const base64 = localStorage.getItem('tpl_raw_' + platform);
+    if (base64) {
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return bytes.buffer;
+    }
+  } catch(e) { console.warn('localStorage 读取模板失败:', e.message); }
+  // 再试 state
+  const tpl = state.templates[platform];
+  if (tpl && tpl.rawData) {
+    const arr = new Uint8Array(tpl.rawData);
+    return arr.buffer;
+  }
+  return null;
 }
 
 function handleDrop(e) {
@@ -1962,7 +2094,9 @@ function styleLabel(i) {
 
 const FIXED_FIELDS = new Set(['类目','品牌','描述','重量','长度','宽度','高度','价格','库存','尺码表图片','面料','风格','领型','版型','机洗']);
 
-function buildExportData() {
+function buildExportData(includeTemplate) {
+  // includeTemplate: true = 包含模板行（用于预览），false = 仅数据行（用于导出写入模板）
+  if (typeof includeTemplate === 'undefined') includeTemplate = true;
   const fields = state.fieldConfigs[state.platform];
   const products = state.products[state.platform];
   const headers = fields.map(f => f.name);
@@ -2090,7 +2224,8 @@ function buildExportData() {
     }
   });
 
-  // ===== 保留模板前5行作为表头（修复列数对齐） =====
+  // ===== 模板行处理（仅当 includeTemplate = true 时，用于预览） =====
+  if (!includeTemplate) templateRowCount = 0; // 不包含模板行
   var template = state.templates[state.platform];
   var templateRowCount = 0;
   if (template && Array.isArray(template.data) && template.data.length > 0) {
@@ -2123,7 +2258,7 @@ function buildExportData() {
     templateRowCount = alignedRows.length;
   }
 
-  console.log('buildExportData rows结构: templateRowCount=' + templateRowCount + ', 总行数=' + rows.length + ', 第' + templateRowCount + '行(索引)=' + (rows[templateRowCount] ? rows[templateRowCount].slice(0,3).join('|') : '(无)'));
+  console.log('buildExportData: includeTemplate=' + includeTemplate + ', templateRowCount=' + templateRowCount + ', 总行数=' + rows.length);
 
   return { rows: rows, linkStarts: linkStarts, templateRowCount: templateRowCount, headerRowIdx: -1 };
 }
@@ -2283,7 +2418,116 @@ async function refreshPreview() {
 // =============================================
 // 导出 Excel（全面错误处理 + 分批压缩）
 // =============================================
+
+// =============================================
+// 以模板文件为基底导出（保留所有 sheet 和格式）
+// =============================================
+async function exportExcelWithTemplate() {
+  const platform = state.platform;
+  const config = state.templates[platform]?.config;
+  if (!config) { showToast('请先配置模板写入参数（目标Sheet+起始行）', 'warn'); return false; }
+  
+  // 1. 获取模板原始数据
+  const rawData = await getTemplateRawData(platform);
+  if (!rawData) { showToast('模板文件已丢失，请重新导入模板', 'error'); return false; }
+  
+  // 2. 解析模板（所有 sheet）
+  let wb;
+  try {
+    wb = XLSX.read(new Uint8Array(rawData), { type: 'array', cellDates: true, cellStyles: true });
+  } catch(e) {
+    showToast('模板文件解析失败：' + (e.message||e), 'error'); return false;
+  }
+  
+  // 3. 找到目标 sheet
+  let targetSheet = wb.Sheets[config.sheetName];
+  if (!targetSheet) {
+    // 找不到指定的 sheet，用第一个
+    targetSheet = wb.Sheets[wb.SheetNames[0]];
+    showToast('未找到 Sheet【' + config.sheetName + '】，改用【' + wb.SheetNames[0] + '】', 'warn');
+  }
+  
+  // 4. 构建纯数据行（不含模板行）
+  showToast('正在生成导出数据…', 'info');
+  const result = buildExportData(false);
+  const dataRows = result.rows; // 纯数据行
+  
+  // 5. 处理图片上传（获取 URL）
+  let imgCells = [];
+  for (let ri = 0; ri < dataRows.length; ri++) {
+    const row = dataRows[ri];
+    for (let ci = 0; ci < row.length; ci++) {
+      if (typeof row[ci] === 'string' && row[ci].startsWith('data:image')) {
+        imgCells.push({ ri: ri, ci: ci, dataUrl: row[ci], filename: 'img_' + ri + '_' + ci + '.jpg' });
+      }
+    }
+  }
+  
+  if (imgCells.length > 0 && sb) {
+    showToast('正在上传 ' + imgCells.length + ' 张图片到图床…', 'info');
+    const BATCH = 10;
+    let failCount = 0;
+    for (let i = 0; i < imgCells.length; i += BATCH) {
+      const batch = imgCells.slice(i, i + BATCH);
+      const results = await Promise.all(batch.map(cell => 
+        uploadImageToStorage(cell.dataUrl, cell.filename).then(url => ({ ri: cell.ri, ci: cell.ci, url: url }))
+      ));
+      results.forEach(r => {
+        if (r.url) { dataRows[r.ri][r.ci] = r.url; }
+        else {
+          dataRows[r.ri][r.ci] = '[图片:上传失败]';
+          failCount++;
+        }
+      });
+    }
+    if (failCount > 0) showToast('图片上传：' + (imgCells.length-failCount)+' 成功，'+failCount+' 失败', 'warn');
+  } else if (imgCells.length > 0 && !sb) {
+    imgCells.forEach(cell => { dataRows[cell.ri][cell.ci] = '[图片:图床未连接]'; });
+  }
+  
+  // 6. 将数据写入目标 sheet（从 dataStartRow-1 行开始，0索引）
+  const startRow = (config.dataStartRow || 6) - 1;
+  showToast('正在写入数据到模板【' + config.sheetName + '】第 ' + (startRow+1) + ' 行…', 'info');
+  
+  // 获取目标 sheet 的范围
+  const range = XLSX.utils.decode_range(targetSheet['!ref'] || XLSX.utils.encode_range({s:{c:0,r:0},e:{c:0,r:0}}));
+  
+  dataRows.forEach((row, ri) => {
+    row.forEach((cellVal, ci) => {
+      const cellRef = XLSX.utils.encode_cell({ r: startRow + ri, c: ci });
+      if (!targetSheet[cellRef]) targetSheet[cellRef] = {};
+      targetSheet[cellRef].v = cellVal != null ? cellVal : '';
+      targetSheet[cellRef].t = 's'; // 字符串类型
+    });
+  });
+  
+  // 更新 sheet 范围
+  range.e.r = Math.max(range.e.r, startRow + dataRows.length - 1);
+  range.e.c = Math.max(range.e.c, (dataRows[0]||[]).length - 1);
+  targetSheet['!ref'] = XLSX.utils.encode_range(range);
+  
+  // 7. 导出整个工作簿（保留所有 sheet）
+  showToast('正在生成 Excel 文件…', 'info');
+  const pNames = { shopee:'Shopee', lazada:'Lazada', tiktok:'TikTok' };
+  const timestamp = new Date().toLocaleDateString('zh-CN').replace(///g,'-');
+  const filename = pNames[platform] + '_批量上架_' + timestamp + '.xlsx';
+  XLSX.writeFile(wb, filename);
+  
+  showToast('导出成功（保留所有 Sheet）：' + filename, 'success');
+  return true;
+}
+
 async function exportExcel() {
+  // 新增：如果有模板文件，以模板为基底导出（保留所有 sheet）
+  const tpl = state.templates[state.platform];
+  if (tpl && tpl.rawData) {
+    await exportExcelWithTemplate();
+    // 恢复按钮状态（在 exportExcelWithTemplate 中可能未恢复）
+    var btnRestore = document.querySelector('#page-export-preview .btn-success');
+    if (btnRestore) { btnRestore.disabled = false; btnRestore.textContent = '导出 Excel'; }
+    return; // 走新逻辑，不执行后续旧逻辑
+  }
+
   var btn = document.querySelector('#page-export-preview .btn-success');
   if (btn) { btn.disabled = true; btn.textContent = '导出中...'; }
   try {
