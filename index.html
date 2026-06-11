@@ -618,6 +618,26 @@
       </div>
     </div>
 
+    <!-- ====== AI标题方案管理弹窗 ====== -->
+    <div class="modal-overlay" id="titleSchemeModal">
+      <div class="modal" style="width:550px">
+        <div class="modal-header">
+          <div class="modal-title">📝 标题方案管理</div>
+          <button class="modal-close" onclick="closeTitleSchemeModal()">×</button>
+        </div>
+        <div class="scheme-save-row">
+          <input class="form-ctrl" id="newTitleSchemeName" placeholder="输入方案名称（如：夏季服装标题词库）…" />
+          <button class="btn btn-primary" onclick="saveTitleScheme()">💾 保存当前为方案</button>
+        </div>
+        <div id="titleSchemeListContainer" class="scheme-list" style="max-height:350px;overflow-y:auto">
+          <p class="text-sm text-muted" style="padding:20px;text-align:center">暂无标题方案</p>
+        </div>
+        <div style="margin-top:16px;text-align:center">
+          <button class="btn btn-outline btn-sm" onclick="closeTitleSchemeModal()">关闭</button>
+        </div>
+      </div>
+    </div>
+
     <!-- ====== 方案选择弹窗（创建产品时） ====== -->
     <div class="modal-overlay" id="schemeSelectorModal">
       <div class="modal" style="width:560px">
@@ -769,6 +789,18 @@ async function loadFromSupabase() {
         state.configSchemes[s.platform].push(s);
       });
     }
+
+    // 加载标题方案
+    try {
+      var { data: tSchemes, error: tSchErr } = await sb.from('ecom_title_schemes').select('*').order('updated_at', { ascending: false });
+      if (!tSchErr && tSchemes) {
+        state.titleSchemes = { shopee: [], lazada: [], tiktok: [] };
+        tSchemes.forEach(function(ts) {
+          if (!state.titleSchemes[ts.platform]) state.titleSchemes[ts.platform] = [];
+          state.titleSchemes[ts.platform].push(ts);
+        });
+      }
+    } catch(e) { console.warn('标题方案加载失败:', e.message); }
 
     setSyncStatus('idle');
     return true;
@@ -922,6 +954,8 @@ const state = {
   products: { shopee: [], lazada: [], tiktok: [] },
   configSchemes: { shopee: [], lazada: [], tiktok: [] },
   currentSchemeName: { shopee: '', lazada: '', tiktok: '' },
+  currentSchemeId: { shopee: null, lazada: null, tiktok: null },
+  titleSchemes: { shopee: [], lazada: [], tiktok: [] },
   currentProductIdx: -1,
   settings: { maxTitleLen: 120, genCount: 5, titleSep: ' ' }
 };
@@ -1550,16 +1584,47 @@ function removeTag(idx, val) {
   if (i > -1) { opts.splice(i, 1); document.getElementById('fextra_' + idx).innerHTML = renderFieldExtra(state.fieldConfigs[state.platform][idx], idx); }
 }
 
-function saveFieldConfig() {
+async function saveFieldConfig() {
   const fields = state.fieldConfigs[state.platform];
   if (!fields || fields.length === 0) { showToast('请先导入模板', 'warn'); return; }
-  const steps = document.querySelectorAll('.step');
+  const platform = state.platform;
+  const schemeId = state.currentSchemeId[platform];
+  const schemeName = state.currentSchemeName[platform];
+
+  // V27: 如果已有加载的方案，覆盖保存（而非另存）
+  if (schemeId && schemeName) {
+    var schemes = state.configSchemes[platform];
+    var idx = schemes.findIndex(function(s) { return s.id === schemeId; });
+    if (idx >= 0) {
+      // 更新方案中的 field_configs
+      schemes[idx].field_configs = JSON.parse(JSON.stringify(fields));
+      schemes[idx].updated_at = new Date().toISOString();
+
+      // 尝试同步到 Supabase
+      try {
+        var { error } = await sb.from('ecom_config_schemes')
+          .update({ field_configs: schemes[idx].field_configs, updated_at: schemes[idx].updated_at })
+          .eq('id', schemeId);
+        if (error) throw error;
+      } catch(e) {
+        console.warn('云端更新方案失败，保留本地:', e.message);
+        localStorage.setItem('ecom_schemes_fallback', JSON.stringify(state.configSchemes));
+      }
+    }
+  }
+
+  // 导航到下一步
+  var steps = document.querySelectorAll('.step');
   steps[1].classList.remove('active'); steps[1].classList.add('done');
   steps[2].classList.add('active');
   document.getElementById('stepLine2').classList.add('done');
-  showToast('字段配置已保存！', 'success');
+  if (schemeId && schemeName) {
+    showToast('方案「' + schemeName + '」已更新保存', 'success');
+  } else {
+    showToast('字段配置已保存！', 'success');
+  }
   debouncedSync();
-  setTimeout(() => showPage('product-info', document.querySelectorAll('.sidebar-item')[1]), 600);
+  setTimeout(function() { showPage('product-info', document.querySelectorAll('.sidebar-item')[1]); }, 600);
 }
 
 function applyBatchMode() {
@@ -1691,6 +1756,7 @@ async function saveAsScheme() {
     if (!state.configSchemes[platform]) state.configSchemes[platform] = [];
     state.configSchemes[platform].push(scheme);
     state.currentSchemeName[platform] = name;
+    state.currentSchemeId[platform] = scheme.id;
     updateCurrentSchemeBadge();
     renderSchemeList();
     document.getElementById('newSchemeName').value = '';
@@ -1704,6 +1770,7 @@ async function saveAsScheme() {
     scheme.updated_at = new Date().toISOString();
     state.configSchemes[platform].push(scheme);
     state.currentSchemeName[platform] = name;
+    state.currentSchemeId[platform] = scheme.id;
     updateCurrentSchemeBadge();
     renderSchemeList();
     document.getElementById('newSchemeName').value = '';
@@ -1764,6 +1831,7 @@ function loadSchemeById(id) {
 
   state.templates[platform] = tpl;
   state.currentSchemeName[platform] = scheme.scheme_name;
+  state.currentSchemeId[platform] = scheme.id;
   updateCurrentSchemeBadge();
   renderFieldList();
   document.getElementById('fieldConfigCard').style.display = 'block';
@@ -1787,6 +1855,7 @@ async function deleteSchemeById(id) {
   schemes.splice(idx, 1);
   if (state.currentSchemeName[platform] === name) {
     state.currentSchemeName[platform] = '';
+    state.currentSchemeId[platform] = null;
     updateCurrentSchemeBadge();
   }
   renderSchemeList();
@@ -1802,6 +1871,136 @@ function updateCurrentSchemeBadge() {
   } else {
     badge.style.display = 'none';
   }
+}
+
+// =============================================
+// AI标题方案管理
+// =============================================
+function openTitleSchemeModal() {
+  document.getElementById('titleSchemeModal').classList.add('open');
+  document.getElementById('newTitleSchemeName').value = '';
+  renderTitleSchemeList();
+}
+
+function closeTitleSchemeModal() {
+  document.getElementById('titleSchemeModal').classList.remove('open');
+}
+
+function renderTitleSchemeList() {
+  var schemes = state.titleSchemes[state.platform] || [];
+  var container = document.getElementById('titleSchemeListContainer');
+  if (!schemes || schemes.length === 0) {
+    container.innerHTML = '<p class="text-sm text-muted" style="padding:20px;text-align:center">暂无标题方案，输入名称后点击「保存当前为方案」</p>';
+    return;
+  }
+  container.innerHTML = schemes.map(function(s, i) {
+    return '<div class="scheme-item">' +
+      '<div class="sicon" style="background:linear-gradient(135deg,#1677ff,#722ed1)">T</div>' +
+      '<div class="sinfo">' +
+        '<div class="sname">' + escHtml(s.scheme_name) + '</div>' +
+        '<div class="smeta">10个词汇库 · ' + (s.parts ? s.parts.filter(function(p){return p;}).length : 0) + ' 个非空部分 · ' + new Date(s.updated_at).toLocaleString('zh-CN') + '</div>' +
+      '</div>' +
+      '<div class="sactions">' +
+        '<button class="btn btn-outline btn-sm" onclick="event.stopPropagation();loadTitleSchemeById(' + s.id + ')">应用</button>' +
+        '<button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteTitleSchemeById(' + s.id + ')">删除</button>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+async function saveTitleScheme() {
+  var name = document.getElementById('newTitleSchemeName').value.trim();
+  if (!name) { showToast('请输入方案名称', 'warn'); return }
+
+  // 读取当前所有产品的 AI 标题词汇（取第一个产品的数据）
+  var platform = state.platform;
+  var products = state.products[platform] || [];
+  var parts = products.length > 0 && products[0].aiTitleParts
+    ? products[0].aiTitleParts.map(function(p) { return p || ''; })
+    : ['','','','','','','','','',''];
+
+  var scheme = {
+    platform: platform,
+    scheme_name: name,
+    parts: parts,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  };
+
+  try {
+    var { data, error } = await sb.from('ecom_title_schemes').insert(scheme).select('id').single();
+    if (error) throw error;
+    scheme.id = data.id;
+  } catch(e) {
+    console.warn('云端保存标题方案失败，使用本地存储:', e.message);
+    scheme.id = Date.now() + Math.random();
+    if (!state.titleSchemes[platform]) state.titleSchemes[platform] = [];
+    state.titleSchemes[platform].push(scheme);
+    localStorage.setItem('ecom_title_schemes_fallback', JSON.stringify(state.titleSchemes));
+    showToast('标题方案已本地保存（云端暂不可用）', 'warn');
+    document.getElementById('newTitleSchemeName').value = '';
+    renderTitleSchemeList();
+    return;
+  }
+
+  if (!state.titleSchemes[platform]) state.titleSchemes[platform] = [];
+  state.titleSchemes[platform].push(scheme);
+  document.getElementById('newTitleSchemeName').value = '';
+  renderTitleSchemeList();
+  showToast('标题方案「' + name + '」已保存', 'success');
+}
+
+function loadTitleSchemeById(id) {
+  var platform = state.platform;
+  var scheme = (state.titleSchemes[platform] || []).find(function(s) { return s.id === id; });
+  if (!scheme) return;
+
+  // 解析 parts：确保是数组格式
+  var parts = scheme.parts;
+  if (typeof parts === 'string') {
+    try { parts = JSON.parse(parts); } catch(e) { parts = ['','','','','','','','','','']; }
+  }
+  if (!Array.isArray(parts) || parts.length < 10) {
+    parts = (parts || []).concat(new Array(Math.max(0, 10 - (parts||[]).length)).fill(''));
+    if (parts.length > 10) parts = parts.slice(0, 10);
+  }
+
+  // 应用到所有产品（当前平台）
+  var products = state.products[platform] || [];
+  for (var i = 0; i < products.length; i++) {
+    products[i].aiTitleParts = parts.slice();
+  }
+
+  // 刷新当前产品界面
+  var currentIdx = state.currentProductIdx;
+  if (currentIdx >= 0 && currentIdx < products.length) {
+    refreshCurrentProductView();
+  }
+
+  closeTitleSchemeModal();
+  showToast('已加载标题方案「' + scheme.scheme_name + '」', 'success');
+}
+
+async function deleteTitleSchemeById(id) {
+  if (!confirm('确认删除此标题方案？')) return;
+  var platform = state.platform;
+  var schemes = state.titleSchemes[platform] || [];
+  var idx = schemes.findIndex(function(s) { return s.id === id; });
+  if (idx < 0) return;
+  var name = schemes[idx].scheme_name;
+  try {
+    await sb.from('ecom_title_schemes').delete().eq('id', id);
+  } catch(e) { console.warn('云端删除标题方案失败:', e.message); }
+  schemes.splice(idx, 1);
+  localStorage.setItem('ecom_title_schemes_fallback', JSON.stringify(state.titleSchemes));
+  renderTitleSchemeList();
+  showToast('标题方案「' + name + '」已删除', 'success');
+}
+
+function refreshCurrentProductView() {
+  var idx = state.currentProductIdx;
+  if (idx < 0) return;
+  renderProductForm(idx);
 }
 
 // 方案选择器（创建产品时使用）
@@ -1986,7 +2185,9 @@ function renderProductForm(idx) {
         <!-- ④ AI标题 -->
         <div id="tab-title" class="tab-pane">
           <div class="section-title"><div class="num">④</div> AI 标题生成器</div>
-          <p class="text-sm text-muted" style="margin-bottom:16px">在10个词汇库中各填入词汇（每行一个），系统随机组合生成不重复标题</p>
+          <p class="text-sm text-muted" style="margin-bottom:16px">在10个词汇库中各填入词汇（每行一个），系统随机组合生成不重复标题
+            <button class="btn btn-outline btn-sm" onclick="openTitleSchemeModal()" style="margin-left:8px">📋 方案管理</button>
+          </p>
           <div class="ai-title-grid">
             ${[{label:'①产品类型',hint:'品类/类目',cls:'b1'},{label:'②核心卖点',hint:'主打特性',cls:'b2'},
                {label:'③风格定位',hint:'设计风格',cls:'b3'},{label:'④材质面料',hint:'材质/成分',cls:'b4'},
@@ -3193,6 +3394,11 @@ async function loadDraft() {
       if (schSaved) {
         state.configSchemes = JSON.parse(schSaved);
       }
+      // 标题方案本地恢复
+      var tSchSaved = localStorage.getItem('ecom_title_schemes_fallback');
+      if (tSchSaved) {
+        try { state.titleSchemes = JSON.parse(tSchSaved); } catch(e) {}
+      }
     } catch(_) {}
   }
   // 恢复当前平台 UI
@@ -3238,6 +3444,8 @@ async function clearAllData() {
   state.templates = { shopee:null, lazada:null, tiktok:null };
   state.configSchemes = { shopee:[], lazada:[], tiktok:[] };
   state.currentSchemeName = { shopee:'', lazada:'', tiktok:'' };
+  state.currentSchemeId = { shopee:null, lazada:null, tiktok:null };
+  state.titleSchemes = { shopee:[], lazada:[], tiktok:[] };
   state.currentProductIdx = -1;
   localStorage.removeItem('ecom_fallback');
   renderProductList(); renderFieldList(); updateProductBadge();
