@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>V28 算法测试 - 结构感知去水印</title>
+<style>
+  body { font-family: sans-serif; padding: 20px; background: #f5f5f5; }
+  h1 { color: #333; }
+  .grid { display: flex; gap: 20px; flex-wrap: wrap; }
+  .panel { background: #fff; border-radius: 8px; padding: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.1); }
+  .panel h3 { margin: 0 0 8px; font-size: 14px; }
+  canvas { border: 1px solid #ddd; }
+  .info { color: #666; font-size: 12px; }
+  .pass { color: #10b981; font-weight: bold; }
+  .fail { color: #ef4444; font-weight: bold; }
+  #results { margin-top: 20px; padding: 12px; background: #fff; border-radius: 8px; }
+</style>
+</head>
+<body>
+<h1>V28 结构感知去水印算法测试</h1>
+<div id="results"></div>
+<div class="grid">
+  <div class="panel"><h3>测试1: 纯色背景+白色文字</h3><canvas id="c1src"></canvas><canvas id="c1mask"></canvas><canvas id="c1out"></canvas></div>
+  <div class="panel"><h3>测试2: 渐变色背景+深色文字</h3><canvas id="c2src"></canvas><canvas id="c2mask"></canvas><canvas id="c2out"></canvas></div>
+  <div class="panel"><h3>测试3: 纹理背景+彩色logo</h3><canvas id="c3src"></canvas><canvas id="c3mask"></canvas><canvas id="c3out"></canvas></div>
+  <div class="panel"><h3>测试4: 照片风格+半透明水印</h3><canvas id="c4src"></canvas><canvas id="c4mask"></canvas><canvas id="c4out"></canvas></div>
+</div>
+
+<script>
+// ===== 内联 V28 算法（从 index.html 提取的核心函数） =====
+
+function extractROI(data, maskData, width, height) {
+  var minX = width, minY = height, maxX = -1, maxY = -1;
+  for (var y = 0; y < height; y++) {
+    for (var x = 0; x < width; x++) {
+      if (maskData.data[(y * width + x) * 4 + 3] > 0) {
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (y < minY) minY = y; if (y > maxY) maxY = y;
+      }
+    }
+  }
+  if (maxX < 0) return null;
+  var expand = Math.max(15, Math.floor((maxX - minX + maxY - minY) * 0.25));
+  minX = Math.max(0, minX - expand);
+  minY = Math.max(0, minY - expand);
+  maxX = Math.min(width - 1, maxX + expand);
+  maxY = Math.min(height - 1, maxY + expand);
+  return { minX:minX, minY:minY, maxX:maxX, maxY:maxY, w:maxX-minX+1, h:maxY-minY+1 };
+}
+
+function downsampleData(srcCanvas, maskCanvas, srcW, srcH, roi, scale) {
+  var sw = Math.max(3, Math.round(roi.w * scale));
+  var sh = Math.max(3, Math.round(roi.h * scale));
+  var cvs = document.createElement('canvas');
+  cvs.width = sw; cvs.height = sh;
+  var ctx = cvs.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(srcCanvas, roi.minX, roi.minY, roi.w, roi.h, 0, 0, sw, sh);
+  var src = ctx.getImageData(0, 0, sw, sh);
+  var mcvs = document.createElement('canvas');
+  mcvs.width = sw; mcvs.height = sh;
+  var mctx = mcvs.getContext('2d');
+  mctx.imageSmoothingEnabled = false;
+  mctx.drawImage(maskCanvas, roi.minX, roi.minY, roi.w, roi.h, 0, 0, sw, sh);
+  var msk = mctx.getImageData(0, 0, sw, sh);
+  return { src:src, mask:msk, w:sw, h:sh };
+}
+
+function buildBinaryMask(maskData, w, h) {
+  var m = new Uint8Array(w * h);
+  for (var i = 0; i < w * h; i++) {
+    m[i] = maskData.data[i * 4 + 3] > 128 ? 1 : 0;
+  }
+  return m;
+}
+
+function inpaintDirectSimple(srcData, maskData, width, height, roi) {
+  var result = new ImageData(new Uint8ClampedArray(srcData.data), width, height);
+  var dirs = [[-1,0],[1,0],[0,-1],[0,1],[-1,-1],[-1,1],[1,-1],[1,1]];
+  for (var iter = 0; iter < 5; iter++) {
+    var changed = false;
+    for (var y = roi.minY; y <= roi.maxY; y++) {
+      for (var x = roi.minX; x <= roi.maxX; x++) {
+        var idx = (y * width + x) * 4;
+        if (maskData.data[idx + 3] === 0) continue;
+        var rS = 0, gS = 0, bS = 0, cnt = 0;
+        for (var d = 0; d < dirs.length; d++) {
+          var nx = x + dirs[d][0], ny = y + dirs[d][1];
+          if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+          var ni = (ny * width + nx) * 4;
+          if (maskData.data[ni + 3] === 0) {
+            rS += result.data[ni]; gS += result.data[ni + 1]; bS += result.data[ni + 2];
+            cnt++;
+          }
+        }
+        if (cnt > 0) {
+          result.data[idx] = Math.round(rS / cnt);
+          result.data[idx + 1] = Math.round(gS / cnt);
+          result.data[idx + 2] = Math.round(bS / cnt);
+          changed = true;
+        }
+      }
+    }
+    if (!changed) break;
+  }
+  return result;
+}
+
+function inpaintMultiScaleV28(srcData, maskData, width, height) {
+  var roi = extractROI(srcData, maskData, width, height);
+  if (!roi) return new ImageData(new Uint8ClampedArray(srcData.data), width, height);
+
+  var fullCanvas = document.createElement('canvas');
+  fullCanvas.width = width; fullCanvas.height = height;
+  var fullCtx = fullCanvas.getContext('2d');
+  fullCtx.putImageData(srcData, 0, 0);
+
+  var fullMaskCanvas = document.createElement('canvas');
+  fullMaskCanvas.width = width; fullMaskCanvas.height = height;
+  var fullMaskCtx = fullMaskCanvas.getContext('2d');
+  var maskImg = fullMaskCtx.createImageData(width, height);
+  for (var i = 0; i < width * height; i++) {
+    var v = maskData.data[i * 4 + 3] > 0 ? 255 : 0;
+    maskImg.data[i*4]=v; maskImg.data[i*4+1]=v; maskImg.data[i*4+2]=v; maskImg.data[i*4+3]=255;
+  }
+  fullMaskCtx.putImageData(maskImg, 0, 0);
+
+  var scale1 = Math.min(1, 120 / Math.max(roi.w, roi.h));
+  var level1 = downsampleData(fullCanvas, fullMaskCanvas, width, height, roi, scale1);
+  var mask1 = buildBinaryMask(level1.mask, level1.w, level1.h);
+  var pyramidSize = Math.max(level1.w, level1.h);
+
+  if (pyramidSize < 4) {
+    return inpaintDirectSimple(srcData, maskData, width, height, roi);
+  }
+
+  structuredFill(level1.src, mask1, level1.w, level1.h, { searchR: Math.max(5, Math.floor(pyramidSize * 0.4)), iterations: 1 });
+
+  var scale2 = Math.min(1, Math.max(0.25, scale1 * 1.8));
+  var level2 = downsampleData(fullCanvas, fullMaskCanvas, width, height, roi, scale2);
+  var mask2 = buildBinaryMask(level2.mask, level2.w, level2.h);
+  upsampleInto(level1.src, level1.w, level1.h, level2.src, level2.w, level2.h, mask2);
+  structuredFill(level2.src, mask2, level2.w, level2.h, { searchR: Math.max(4, Math.floor(Math.max(level2.w, level2.h) * 0.25)), iterations: 1 });
+
+  var roiCanvas = document.createElement('canvas');
+  roiCanvas.width = roi.w; roiCanvas.height = roi.h;
+  var roiCtx = roiCanvas.getContext('2d');
+  roiCtx.drawImage(fullCanvas, roi.minX, roi.minY, roi.w, roi.h, 0, 0, roi.w, roi.h);
+  var level3Src = roiCtx.getImageData(0, 0, roi.w, roi.h);
+
+  var roiMaskCanvas = document.createElement('canvas');
+  roiMaskCanvas.width = roi.w; roiMaskCanvas.height = roi.h;
+  var roiMaskCtx = roiMaskCanvas.getContext('2d');
+  roiMaskCtx.imageSmoothingEnabled = false;
+  roiMaskCtx.drawImage(fullMaskCanvas, roi.minX, roi.minY, roi.w, roi.h, 0, 0, roi.w, roi.h);
+  var level3Mask = roiMaskCtx.getImageData(0, 0, roi.w, roi.h);
+  var mask3 = buildBinaryMask(level3Mask, roi.w, roi.h);
+
+  upsampleInto(level2.src, level2.w, level2.h, level3Src, roi.w, roi.h, mask3);
+  structuredFill(level3Src, mask3, roi.w, roi.h, { searchR: Math.min(20, Math.max(8, Math.floor(Math.max(roi.w, roi.h) * 0.15))), iterations: 1 });
+
+  var refinedSrc = new ImageData(new Uint8ClampedArray(level3Src.data), roi.w, roi.h);
+  structuredFill(refinedSrc, mask3, roi.w, roi.h, { searchR: 5, iterations: 2 });
+
+  var result = new ImageData(new Uint8ClampedArray(srcData.data), width, height);
+  var resultCtx = fullCanvas.getContext('2d');
+  resultCtx.putImageData(srcData, 0, 0);
+  var roiCanvas2 = document.createElement('canvas');
+  roiCanvas2.width = roi.w; roiCanvas2.height = roi.h;
+  roiCanvas2.getContext('2d').putImageData(refinedSrc, 0, 0);
+  resultCtx.drawImage(roiCanvas2, roi.minX, roi.minY);
+  var upData = resultCtx.getImageData(0, 0, width, height);
+
+  for (var y = 0; y < height; y++) {
+    for (var x = 0; x < width; x++) {
+      var idx2 = (y * width + x) * 4;
+      if (maskData.data[idx2 + 3] > 0) {
+        result.data[idx2]     = upData.data[idx2];
+        result.data[idx2 + 1] = upData.data[idx2 + 1];
+        result.data[idx2 + 2] = upData.data[idx2 + 2];
+      }
+    }
+  }
+
+  blendEdgesV28(result, srcData, maskData, width, height, roi);
+  return result;
+}
+
+function structuredFill(data, mask, w, h, opts) {
+  var searchR = opts.searchR || 8;
+  var iterations = opts.iterations || 1;
+  var spatialSigma = searchR / 2.5;
+  var maskPixels = [];
+  for (var y = 0; y < h; y++) {
+    for (var x = 0; x < w; x++) {
+      if (!mask[y * w + x]) continue;
+      var minD = searchR + 1;
+      for (var dy = -1; dy <= 1; dy++) {
+        for (var dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          var ny2 = y + dy, nx2 = x + dx;
+          if (nx2 < 0 || nx2 >= w || ny2 < 0 || ny2 >= h) continue;
+          if (!mask[ny2 * w + nx2]) { minD = 1; break; }
+        }
+        if (minD === 1) break;
+      }
+      maskPixels.push({ x:x, y:y, dist:minD });
+    }
+  }
+  if (maskPixels.length === 0) return;
+  maskPixels.sort(function(a, b) { return a.dist - b.dist; });
+  var sampleStep = searchR > 15 ? 2 : 1;
+
+  for (var iter = 0; iter < iterations; iter++) {
+    for (var pi = 0; pi < maskPixels.length; pi++) {
+      var p = maskPixels[pi];
+      var di = (p.y * w + p.x) * 4;
+      var nbrColors = [];
+      var nbrPos = [];
+      for (var dy = -1; dy <= 1; dy++) {
+        for (var dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          var ny3 = p.y + dy, nx3 = p.x + dx;
+          if (nx3 < 0 || nx3 >= w || ny3 < 0 || ny3 >= h) continue;
+          if (mask[ny3 * w + nx3]) continue;
+          var ni = (ny3 * w + nx3) * 4;
+          nbrColors.push([data.data[ni], data.data[ni+1], data.data[ni+2]]);
+          nbrPos.push([dx, dy]);
+        }
+      }
+      if (nbrColors.length === 0) {
+        for (var dy2 = -2; dy2 <= 2; dy2++) {
+          for (var dx2 = -2; dx2 <= 2; dx2++) {
+            if (dx2 === 0 && dy2 === 0) continue;
+            if (Math.abs(dx2) <= 1 && Math.abs(dy2) <= 1) continue;
+            var ny4 = p.y + dy2, nx4 = p.x + dx2;
+            if (nx4 < 0 || nx4 >= w || ny4 < 0 || ny4 >= h) continue;
+            if (mask[ny4 * w + nx4]) continue;
+            var ni2 = (ny4 * w + nx4) * 4;
+            nbrColors.push([data.data[ni2], data.data[ni2+1], data.data[ni2+2]]);
+          }
+        }
+      }
+      if (nbrColors.length === 0) continue;
+
+      var rS = 0, gS = 0, bS = 0, wS = 0;
+      var minY2 = Math.max(0, p.y - searchR);
+      var maxY2 = Math.min(h - 1, p.y + searchR);
+      var minX2 = Math.max(0, p.x - searchR);
+      var maxX2 = Math.min(w - 1, p.x + searchR);
+
+      for (var sy = minY2; sy <= maxY2; sy += sampleStep) {
+        for (var sx = minX2; sx <= maxX2; sx += sampleStep) {
+          if (mask[sy * w + sx]) continue;
+          if (sx === p.x && sy === p.y) continue;
+          var si = (sy * w + sx) * 4;
+          var dx2 = sx - p.x, dy2 = sy - p.y;
+          var dist = Math.sqrt(dx2 * dx2 + dy2 * dy2);
+          var simSum = 0, simCnt = 0;
+          for (var nb = 0; nb < nbrColors.length; nb++) {
+            var ox = nbrPos[nb][0], oy = nbrPos[nb][1];
+            var qx = sx + ox, qy = sy + oy;
+            if (qx < 0 || qx >= w || qy < 0 || qy >= h) continue;
+            if (mask[qy * w + qx]) continue;
+            var qi = (qy * w + qx) * 4;
+            var dR = data.data[qi] - nbrColors[nb][0];
+            var dG = data.data[qi+1] - nbrColors[nb][1];
+            var dB = data.data[qi+2] - nbrColors[nb][2];
+            simSum += Math.exp(-(dR*dR + dG*dG + dB*dB) / 800);
+            simCnt++;
+          }
+          var similarity = simCnt > 0 ? simSum / simCnt : 0.3;
+          var spatialW = Math.exp(-(dist * dist) / (2 * spatialSigma * spatialSigma));
+          var weight = spatialW * similarity * similarity;
+          rS += data.data[si] * weight;
+          gS += data.data[si + 1] * weight;
+          bS += data.data[si + 2] * weight;
+          wS += weight;
+        }
+      }
+      if (wS > 1e-9) {
+        data.data[di] = Math.round(rS / wS);
+        data.data[di + 1] = Math.round(gS / wS);
+        data.data[di + 2] = Math.round(bS / wS);
+        data.data[di + 3] = 255;
+      }
+    }
+  }
+}
+
+function upsampleInto(srcSmall, sw, sh, dstLarge, dw, dh, dstMask) {
+  var tmpCanvas = document.createElement('canvas');
+  tmpCanvas.width = sw; tmpCanvas.height = sh;
+  var tmpCtx = tmpCanvas.getContext('2d');
+  tmpCtx.putImageData(srcSmall, 0, 0);
+  var bigCanvas = document.createElement('canvas');
+  bigCanvas.width = dw; bigCanvas.height = dh;
+  var bigCtx = bigCanvas.getContext('2d');
+  bigCtx.imageSmoothingEnabled = true;
+  bigCtx.imageSmoothingQuality = 'high';
+  bigCtx.drawImage(tmpCanvas, 0, 0, sw, sh, 0, 0, dw, dh);
+  var upData = bigCtx.getImageData(0, 0, dw, dh);
+  for (var i = 0; i < dw * dh; i++) {
+    if (dstMask[i]) {
+      dstLarge.data[i * 4]     = upData.data[i * 4];
+      dstLarge.data[i * 4 + 1] = upData.data[i * 4 + 1];
+      dstLarge.data[i * 4 + 2] = upData.data[i * 4 + 2];
+    }
+  }
+}
+
+function blendEdgesV28(result, srcData, maskData, width, height, roi) {
+  var blurR = 8;
+  var bMinX = Math.max(0, roi.minX - blurR);
+  var bMinY = Math.max(0, roi.minY - blurR);
+  var bMaxX = Math.min(width - 1, roi.maxX + blurR);
+  var bMaxY = Math.min(height - 1, roi.maxY + blurR);
+  for (var y = bMinY; y <= bMaxY; y++) {
+    for (var x = bMinX; x <= bMaxX; x++) {
+      var idx = (y * width + x) * 4;
+      if (maskData.data[idx + 3] > 0) continue;
+      var minDist = blurR + 1;
+      var searchEnd = blurR;
+      var found = false;
+      for (var r = 1; r <= searchEnd && !found; r++) {
+        for (var dy = -r; dy <= r && !found; dy++) {
+          var ny = y + dy;
+          if (ny < 0 || ny >= height) continue;
+          for (var dx = -r; dx <= r && !found; dx++) {
+            if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
+            var nx = x + dx;
+            if (nx < 0 || nx >= width) continue;
+            if (maskData.data[(ny * width + nx) * 4 + 3] > 0) {
+              minDist = Math.sqrt(dx * dx + dy * dy);
+              found = true;
+            }
+          }
+        }
+      }
+      if (minDist > blurR) continue;
+      var sigmaDist = blurR / 3;
+      var dt = Math.exp(-(minDist * minDist) / (2 * sigmaDist * sigmaDist));
+      var dR = Math.abs(result.data[idx] - srcData.data[idx]);
+      var dG = Math.abs(result.data[idx + 1] - srcData.data[idx + 1]);
+      var dB = Math.abs(result.data[idx + 2] - srcData.data[idx + 2]);
+      var colorDiff = (dR + dG + dB) / 3;
+      var colorWeight = Math.exp(-colorDiff / 80);
+      var t = dt * (0.5 + 0.5 * colorWeight);
+      result.data[idx]     = Math.round(result.data[idx] * t + srcData.data[idx] * (1 - t));
+      result.data[idx + 1] = Math.round(result.data[idx + 1] * t + srcData.data[idx + 1] * (1 - t));
+      result.data[idx + 2] = Math.round(result.data[idx + 2] * t + srcData.data[idx + 2] * (1 - t));
+    }
+  }
+}
+
+// ===== 测试用例 =====
+
+function drawToCanvas(canvasId, drawFn) {
+  var c = document.getElementById(canvasId);
+  c.width = 300; c.height = 200;
+  var ctx = c.getContext('2d');
+  drawFn(ctx);
+  return c;
+}
+
+function runTest(name, width, height, drawSrc, drawMask) {
+  var t0 = performance.now();
+
+  // 源图
+  var srcCvs = document.createElement('canvas');
+  srcCvs.width = width; srcCvs.height = height;
+  var srcCtx = srcCvs.getContext('2d');
+  drawSrc(srcCtx);
+  var srcData = srcCtx.getImageData(0, 0, width, height);
+
+  // mask
+  var maskCvs = document.createElement('canvas');
+  maskCvs.width = width; maskCvs.height = height;
+  var maskCtx = maskCvs.getContext('2d');
+  drawMask(maskCtx);
+  var maskData = maskCtx.getImageData(0, 0, width, height);
+
+  // 运行算法
+  var result = inpaintMultiScaleV28(srcData, maskData, width, height);
+  var elapsed = (performance.now() - t0).toFixed(0);
+
+  // 验证：mask 区域是否被填充（数据改变了）
+  var filledCount = 0, totalMask = 0, maxColorDiff = 0;
+  for (var i = 0; i < width * height; i++) {
+    var idx3 = i * 4;
+    if (maskData.data[idx3 + 3] > 0) {
+      totalMask++;
+      var dR2 = Math.abs(result.data[idx3] - srcData.data[idx3]);
+      var dG2 = Math.abs(result.data[idx3 + 1] - srcData.data[idx3 + 1]);
+      var dB2 = Math.abs(result.data[idx3 + 2] - srcData.data[idx3 + 2]);
+      var diff = Math.max(dR2, dG2, dB2);
+      if (diff > maxColorDiff) maxColorDiff = diff;
+      if (diff > 0) filledCount++;
+    }
+  }
+  var fillRate = totalMask > 0 ? (filledCount / totalMask * 100).toFixed(1) : 0;
+
+  console.log(name + ': ' + elapsed + 'ms, 填充率 ' + fillRate + '%, 最大色差 ' + maxColorDiff);
+  return { totalMask: totalMask, fillRate: fillRate, maxColorDiff: maxColorDiff, elapsed: elapsed };
+}
+
+// ---- 测试 1: 纯色背景 (rgb(240,200,180)) + 白色文字 ----
+drawToCanvas('c1src', function(ctx) {
+  ctx.fillStyle = '#f0c8b4'; ctx.fillRect(0,0,300,200);
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 40px Arial'; ctx.fillText('WATER', 30, 110);
+});
+drawToCanvas('c1mask', function(ctx) {
+  ctx.fillStyle = '#000'; ctx.fillRect(0,0,300,200);
+  ctx.fillStyle = '#0f0'; ctx.font = 'bold 40px Arial'; ctx.fillText('WATER', 30, 110);
+});
+
+// ---- 测试 2: 渐变色背景 + 深色文字 ----
+drawToCanvas('c2src', function(ctx) {
+  var g = ctx.createLinearGradient(0,0,300,200);
+  g.addColorStop(0, '#667eea'); g.addColorStop(0.5, '#764ba2'); g.addColorStop(1, '#f093fb');
+  ctx.fillStyle = g; ctx.fillRect(0,0,300,200);
+  ctx.fillStyle = '#1a1a2e'; ctx.font = 'bold 36px Arial'; ctx.fillText('LOGO', 60, 100);
+});
+drawToCanvas('c2mask', function(ctx) {
+  ctx.fillStyle = '#000'; ctx.fillRect(0,0,300,200);
+  ctx.fillStyle = '#0f0'; ctx.font = 'bold 36px Arial'; ctx.fillText('LOGO', 60, 100);
+});
+
+// ---- 测试 3: 纹理背景（网格图案）+ 彩色 logo ----
+drawToCanvas('c3src', function(ctx) {
+  // 棋盘格背景
+  for (var y = 0; y < 200; y += 10) {
+    for (var x = 0; x < 300; x += 10) {
+      ctx.fillStyle = ((x + y) / 10) % 2 === 0 ? '#e8d5b7' : '#d4c4a8';
+      ctx.fillRect(x, y, 10, 10);
+    }
+  }
+  // 彩色文字
+  ctx.fillStyle = '#e74c3c'; ctx.font = 'bold 42px Arial';
+  ctx.shadowColor = 'rgba(0,0,0,0.3)'; ctx.shadowBlur = 4;
+  ctx.fillText('SALE', 50, 110);
+  ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0;
+});
+drawToCanvas('c3mask', function(ctx) {
+  ctx.fillStyle = '#000'; ctx.fillRect(0,0,300,200);
+  ctx.fillStyle = '#0f0'; ctx.font = 'bold 42px Arial';
+  ctx.fillText('SALE', 50, 110);
+});
+
+// ---- 测试 4: 照片风格（模拟）+ 半透明水印 ----
+drawToCanvas('c4src', function(ctx) {
+  // 模拟照片背景
+  var g = ctx.createRadialGradient(150, 100, 20, 150, 100, 250);
+  g.addColorStop(0, '#ffeaa7'); g.addColorStop(0.3, '#fab1a0'); g.addColorStop(0.7, '#74b9ff');
+  g.addColorStop(1, '#a29bfe');
+  ctx.fillStyle = g; ctx.fillRect(0,0,300,200);
+  // 添加一些纹理线
+  ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+  for (var i = 0; i < 20; i++) {
+    ctx.beginPath(); ctx.moveTo(Math.random()*300, Math.random()*200);
+    ctx.lineTo(Math.random()*300, Math.random()*200); ctx.stroke();
+  }
+  // 半透明水印
+  ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.font = 'bold 32px Arial';
+  ctx.fillText('©2024', 80, 110);
+});
+drawToCanvas('c4mask', function(ctx) {
+  ctx.fillStyle = '#000'; ctx.fillRect(0,0,300,200);
+  ctx.fillStyle = '#0f0'; ctx.font = 'bold 32px Arial';
+  ctx.fillText('©2024', 80, 110);
+});
+
+// ===== 执行测试并显示结果 =====
+var tests = [
+  { name: '测试1: 纯色背景+白色文字', w:300, h:200, src:'c1src', mask:'c1mask', out:'c1out' },
+  { name: '测试2: 渐变色背景+深色文字', w:300, h:200, src:'c2src', mask:'c2mask', out:'c2out' },
+  { name: '测试3: 纹理背景+彩色logo', w:300, h:200, src:'c3src', mask:'c3mask', out:'c3out' },
+  { name: '测试4: 照片风格+半透明水印', w:300, h:200, src:'c4src', mask:'c4mask', out:'c4out' }
+];
+
+var resultsHtml = '';
+tests.forEach(function(t) {
+  var srcCvs = document.getElementById(t.src);
+  var maskCvs = document.getElementById(t.mask);
+  var outCvs = document.getElementById(t.out);
+
+  var srcCtx = srcCvs.getContext('2d');
+  var maskCtx = maskCvs.getContext('2d');
+  var srcData = srcCtx.getImageData(0, 0, t.w, t.h);
+  var maskData = maskCtx.getImageData(0, 0, t.w, t.h);
+
+  var result = inpaintMultiScaleV28(srcData, maskData, t.w, t.h);
+
+  outCvs.width = t.w; outCvs.height = t.h;
+  outCvs.getContext('2d').putImageData(result, 0, 0);
+
+  // 检查效果
+  var filledCount = 0, totalMask = 0;
+  for (var i = 0; i < t.w * t.h; i++) {
+    var idx4 = i * 4;
+    if (maskData.data[idx4 + 3] > 0) {
+      totalMask++;
+      var diff = Math.abs(result.data[idx4] - srcData.data[idx4]) +
+                 Math.abs(result.data[idx4+1] - srcData.data[idx4+1]) +
+                 Math.abs(result.data[idx4+2] - srcData.data[idx4+2]);
+      if (diff > 0) filledCount++;
+    }
+  }
+  var status = filledCount >= totalMask * 0.5 ? 'pass' : 'fail';
+  resultsHtml += '<div>' + t.name + ' | mask像素: ' + totalMask +
+    ' | 已修改: ' + filledCount + ' | <span class="' + status + '">' +
+    (filledCount >= totalMask * 0.5 ? '通过' : '未通过') + '</span></div>';
+});
+
+document.getElementById('results').innerHTML = '<h3>验证结果：</h3>' + resultsHtml +
+  '<p class="info">请查看下方对比图：原图 → Mask(绿色=水印区域) → 修复结果</p>';
+</script>
+</body>
+</html>

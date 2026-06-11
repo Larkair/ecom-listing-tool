@@ -234,6 +234,8 @@
     .product-item .info { flex: 1; min-width: 0; }
     .product-item .pname { font-weight: 500; font-size: .85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .product-item .pmeta { font-size: .72rem; color: var(--muted); }
+    .product-scheme-badge { display:inline-flex;align-items:center;gap:4px;font-size:.75rem;font-weight:500;
+      color:var(--pri);background:var(--pri-l);padding:3px 10px;border-radius:20px;white-space:nowrap; }
     .thumb-placeholder { width: 44px; height: 44px; background: #f1f5f9; border-radius: 6px;
                          display: flex; align-items: center; justify-content: center; color: var(--muted); flex-shrink: 0; }
 
@@ -554,7 +556,7 @@
     <div id="page-watermark" class="page">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:12px">
         <div>
-          <h2 style="margin:0 0 4px;font-size:1.15rem">🖼️ 图片批量去水印 <span id="wmAiBadge" style="font-size:.65rem;background:linear-gradient(135deg,#10b981,#059669);color:#fff;padding:2px 7px;border-radius:10px;vertical-align:middle;margin-left:4px">泊松修复</span></h2>
+          <h2 style="margin:0 0 4px;font-size:1.15rem">🖼️ 图片批量去水印 <span id="wmAiBadge" style="font-size:.65rem;background:linear-gradient(135deg,#6366f1,#4f46e5);color:#fff;padding:2px 7px;border-radius:10px;vertical-align:middle;margin-left:4px">结构感知</span></h2>
           <p style="margin:0;font-size:.82rem;color:var(--muted)">上传图片 → 框选水印区域 → 一键去除 → 批量导出</p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap" id="wmToolbar">
@@ -705,7 +707,7 @@ const MAX_IMG_PER_GROUP = 9;
 // =============================================
 // Supabase 初始化（容错：CDN 加载失败不影响核心功能）
 // =============================================
-console.log('🛠 批量上架工具 V27 | 2026-06-11 | 纯JS泊松修复 | 图片列动态生成 | 标题10部分去重');
+console.log('🛠 批量上架工具 V28 | 2026-06-11 | 多尺度结构感知修复 | 配置方案标识 | 对比按钮优化');
 // =============================================
 const SUPABASE_URL = 'https://khrppyhcjzkkokyhnhhd.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtocnBweWhjanpra29reWhuaGhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwNzY1NDEsImV4cCI6MjA5NjY1MjU0MX0.uS9YablBNwjUmQlwRbLRw3SEPNgEnO1Uc6Poe1SeB88';
@@ -2069,7 +2071,9 @@ function addNewProduct() {
     fieldValues: {},   // key -> value
     aiTitleParts: ['','','','','','','','','',''],
     generatedTitles: [],
-    selectedTitle: ''
+    selectedTitle: '',
+    configSchemeName: state.currentSchemeName[state.platform] || '',  // V27: 记录新增时的配置方案
+    configSchemeId: state.currentSchemeId[state.platform] || null
   };
   state.products[state.platform].push(newProduct);
   state.currentProductIdx = state.products[state.platform].length - 1;
@@ -2130,6 +2134,7 @@ function renderProductForm(idx) {
       <div class="card-header">
         <input class="form-ctrl" style="font-size:1rem;font-weight:600;border:none;padding:0;width:260px;box-shadow:none"
                value="${escHtml(product.name)}" oninput="product_rename(${idx},this.value)" />
+        ${product.configSchemeName ? '<span class="product-scheme-badge">📋 ' + escHtml(product.configSchemeName) + '</span>' : (state.currentSchemeName[state.platform] ? '<span class="product-scheme-badge" style="opacity:0.6">📋 ' + escHtml(state.currentSchemeName[state.platform]) + '</span>' : '')}
         <div class="ml-auto flex gap8">
           <button class="btn btn-outline btn-sm" onclick="duplicateProduct(${idx})">复制</button>
           <button class="btn btn-primary btn-sm" onclick="saveCurrentProduct()">保存</button>
@@ -3696,11 +3701,11 @@ function renderWmGrid() {
 
     body.appendChild(previewCanvas);
 
-    // 处理后显示对比切换按钮
+    // 处理后显示对比切换按钮（左下角，无遮挡）
     if (item.processed && item.processedUrl) {
       var toggleBar = document.createElement('div');
-      toggleBar.style.cssText = 'position:absolute;bottom:0;left:0;right:0;display:flex;justify-content:center;gap:8px;padding:6px;background:rgba(0,0,0,0.5)';
-      toggleBar.innerHTML = '<button class="btn btn-sm" style="font-size:.7rem;padding:3px 8px;background:#fff;color:#333;border:none;border-radius:4px;cursor:pointer" onclick="event.stopPropagation();toggleWmCompare(' + idx + ',this)">🔄 对比原图</button>';
+      toggleBar.style.cssText = 'position:absolute;bottom:4px;left:4px;pointer-events:none';
+      toggleBar.innerHTML = '<button class="btn btn-sm" style="font-size:.7rem;padding:2px 7px;background:rgba(255,255,255,0.75);color:#333;border:1px solid rgba(0,0,0,0.12);border-radius:4px;cursor:pointer;pointer-events:auto;backdrop-filter:blur(2px)" onclick="event.stopPropagation();toggleWmCompare(' + idx + ',this)">🔄 对比原图</button>';
       body.appendChild(toggleBar);
     }
 
@@ -3860,7 +3865,7 @@ function setupWmDrawing(previewCanvas, item, idx) {
   });
 }
 
-// 批量去水印（V27：纯JS多分辨率泊松修复，无外部依赖）
+// 批量去水印（V28：多尺度结构感知修复，3级金字塔+邻域相似度加权）
 function batchRemoveWatermark() {
   if (wmState.processing) { showToast('正在处理中，请稍候…', 'warn'); return; }
   var hasMask = false;
@@ -3948,16 +3953,16 @@ function batchRemoveWatermark() {
   setTimeout(function() { processOne(0); }, 20);
 }
 
-// ===== V27 去水印算法：纯JS多分辨率泊松修复（无外部依赖，100%可控） =====
+// ===== V28 去水印算法：多尺度结构感知修复（纯JS，无外部依赖） =====
+// 核心思路：3级金字塔 + 邻域相似度加权填充 + 自适应边缘融合
+// 相比V27的简单平均，本算法通过"找相似邻域"来保留纹理和边缘
 
-// 主入口
 function inpaintImageV24(srcData, maskData, width, height) {
-  return inpaintPoissonMultiRes(srcData, maskData, width, height);
+  return inpaintMultiScaleV28(srcData, maskData, width, height);
 }
 
-// 多分辨率泊松修复：降采样 → 迭代填充 → 升采样 → 边缘融合
-function inpaintPoissonMultiRes(srcData, maskData, width, height) {
-  // ---- Step 1: 找到 mask 边界框 ----
+// ---- 辅助：从 ImageData 裁剪 ROI ----
+function extractROI(data, maskData, width, height) {
   var minX = width, minY = height, maxX = -1, maxY = -1;
   for (var y = 0; y < height; y++) {
     for (var x = 0; x < width; x++) {
@@ -3967,213 +3972,393 @@ function inpaintPoissonMultiRes(srcData, maskData, width, height) {
       }
     }
   }
-  if (maxX < 0) return new ImageData(new Uint8ClampedArray(srcData.data), width, height);
-
-  // 扩大 ROI 以获得更多上下文信息
-  var expand = Math.max(10, Math.floor((maxX - minX + maxY - minY) * 0.2));
+  if (maxX < 0) return null;
+  // 扩大 ROI
+  var expand = Math.max(15, Math.floor((maxX - minX + maxY - minY) * 0.25));
   minX = Math.max(0, minX - expand);
   minY = Math.max(0, minY - expand);
   maxX = Math.min(width - 1, maxX + expand);
   maxY = Math.min(height - 1, maxY + expand);
-  var roiW = maxX - minX + 1, roiH = maxY - minY + 1;
+  return { minX:minX, minY:minY, maxX:maxX, maxY:maxY, w:maxX-minX+1, h:maxY-minY+1 };
+}
 
-  // ---- Step 2: 降采样到可控尺寸（最大250px） ----
-  var maxDim = 250;
-  var scale = Math.min(1, maxDim / Math.max(roiW, roiH));
-  var sw = Math.max(3, Math.round(roiW * scale));
-  var sh = Math.max(3, Math.round(roiH * scale));
+// ---- 将 ImageData 转为 canvas，缩放后用 getImageData 取回 ----
+function downsampleData(srcCanvas, maskCanvas, srcW, srcH, roi, scale) {
+  var sw = Math.max(3, Math.round(roi.w * scale));
+  var sh = Math.max(3, Math.round(roi.h * scale));
 
-  // 降采样原图（canvas 双线性）
-  var bigCvs = document.createElement('canvas');
-  bigCvs.width = width; bigCvs.height = height;
-  var bigCtx = bigCvs.getContext('2d');
-  bigCtx.putImageData(srcData, 0, 0);
+  // 降采样原图
+  var cvs = document.createElement('canvas');
+  cvs.width = sw; cvs.height = sh;
+  var ctx = cvs.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(srcCanvas, roi.minX, roi.minY, roi.w, roi.h, 0, 0, sw, sh);
+  var src = ctx.getImageData(0, 0, sw, sh);
 
-  var smallCvs = document.createElement('canvas');
-  smallCvs.width = sw; smallCvs.height = sh;
-  var smallCtx = smallCvs.getContext('2d');
-  smallCtx.imageSmoothingEnabled = true;
-  smallCtx.imageSmoothingQuality = 'high';
-  smallCtx.drawImage(bigCvs, minX, minY, roiW, roiH, 0, 0, sw, sh);
-  var smallData = smallCtx.getImageData(0, 0, sw, sh);
+  // 降采样 mask（关闭平滑）
+  var mcvs = document.createElement('canvas');
+  mcvs.width = sw; mcvs.height = sh;
+  var mctx = mcvs.getContext('2d');
+  mctx.imageSmoothingEnabled = false;
+  mctx.drawImage(maskCanvas, roi.minX, roi.minY, roi.w, roi.h, 0, 0, sw, sh);
+  var msk = mctx.getImageData(0, 0, sw, sh);
 
-  // 降采样 mask（用 canvas，关掉平滑避免 mask 模糊）
-  var maskCvs = document.createElement('canvas');
-  maskCvs.width = width; maskCvs.height = height;
-  var maskCtx2 = maskCvs.getContext('2d');
-  var maskImg = maskCtx2.createImageData(width, height);
+  return { src:src, mask:msk, w:sw, h:sh };
+}
+
+// ---- 构建二值 mask ----
+function buildBinaryMask(maskData, w, h) {
+  var m = new Uint8Array(w * h);
+  for (var i = 0; i < w * h; i++) {
+    m[i] = maskData.data[i * 4 + 3] > 128 ? 1 : 0;
+  }
+  return m;
+}
+
+// ============================================================
+// V28 主算法：3级金字塔 + 结构感知加权填充
+// ============================================================
+function inpaintMultiScaleV28(srcData, maskData, width, height) {
+  var roi = extractROI(srcData, maskData, width, height);
+  if (!roi) return new ImageData(new Uint8ClampedArray(srcData.data), width, height);
+
+  // 准备全尺寸 canvas 用于缩放操作
+  var fullCanvas = document.createElement('canvas');
+  fullCanvas.width = width; fullCanvas.height = height;
+  var fullCtx = fullCanvas.getContext('2d');
+  fullCtx.putImageData(srcData, 0, 0);
+
+  var fullMaskCanvas = document.createElement('canvas');
+  fullMaskCanvas.width = width; fullMaskCanvas.height = height;
+  var fullMaskCtx = fullMaskCanvas.getContext('2d');
+  // 把 mask 画成二值图
+  var maskImg = fullMaskCtx.createImageData(width, height);
   for (var i = 0; i < width * height; i++) {
     var v = maskData.data[i * 4 + 3] > 0 ? 255 : 0;
-    maskImg.data[i * 4] = v; maskImg.data[i * 4 + 1] = v;
-    maskImg.data[i * 4 + 2] = v; maskImg.data[i * 4 + 3] = 255;
+    maskImg.data[i*4]=v; maskImg.data[i*4+1]=v; maskImg.data[i*4+2]=v; maskImg.data[i*4+3]=255;
   }
-  maskCtx2.putImageData(maskImg, 0, 0);
+  fullMaskCtx.putImageData(maskImg, 0, 0);
 
-  var smallMaskCvs = document.createElement('canvas');
-  smallMaskCvs.width = sw; smallMaskCvs.height = sh;
-  var smallMaskCtx = smallMaskCvs.getContext('2d');
-  smallMaskCtx.imageSmoothingEnabled = false; // mask 绝对不能平滑
-  smallMaskCtx.drawImage(maskCvs, minX, minY, roiW, roiH, 0, 0, sw, sh);
-  var smallMaskData = smallMaskCtx.getImageData(0, 0, sw, sh);
+  // ---- 3级金字塔：粗→中→细 ----
+  // 第1级：最粗（1/4 尺寸）
+  var scale1 = Math.min(1, 120 / Math.max(roi.w, roi.h));
+  var level1 = downsampleData(fullCanvas, fullMaskCanvas, width, height, roi, scale1);
+  var mask1 = buildBinaryMask(level1.mask, level1.w, level1.h);
+  var pyramidSize = Math.max(level1.w, level1.h);
 
-  // 构建二值 mask 数组
-  var smallMask = new Uint8Array(sw * sh);
-  for (var mi = 0; mi < sw * sh; mi++) {
-    smallMask[mi] = smallMaskData.data[mi * 4] > 128 ? 1 : 0;
+  // 如果 pyramid 太小，直接回退到简单模式
+  if (pyramidSize < 4) {
+    return inpaintDirectSimple(srcData, maskData, width, height, roi);
   }
 
-  // ---- Step 3: 高斯-赛德尔迭代填充（在小图上，速度快） ----
-  poissonFill(smallData, smallMask, sw, sh);
+  // Level 1: 最粗粒度 — 用较大搜索窗口捕捉整体色调
+  structuredFill(level1.src, mask1, level1.w, level1.h, { searchR: Math.max(5, Math.floor(pyramidSize * 0.4)), iterations: 1 });
 
-  // ---- Step 4: 升采样回原图 ----
-  var upCvs = document.createElement('canvas');
-  upCvs.width = sw; upCvs.height = sh;
-  var upCtx = upCvs.getContext('2d');
-  upCtx.putImageData(smallData, 0, 0);
+  // Level 2: 中等（1/2 尺寸）
+  var scale2 = Math.min(1, Math.max(0.25, scale1 * 1.8));
+  var level2 = downsampleData(fullCanvas, fullMaskCanvas, width, height, roi, scale2);
+  var mask2 = buildBinaryMask(level2.mask, level2.w, level2.h);
+  // 把 level1 的结果升采样到 level2 作为初始化
+  upsampleInto(level1.src, level1.w, level1.h, level2.src, level2.w, level2.h, mask2);
+  structuredFill(level2.src, mask2, level2.w, level2.h, { searchR: Math.max(4, Math.floor(Math.max(level2.w, level2.h) * 0.25)), iterations: 1 });
 
-  var resultCvs = document.createElement('canvas');
-  resultCvs.width = width; resultCvs.height = height;
-  var resultCtx = resultCvs.getContext('2d');
+  // Level 3: 原尺寸 ROI — 精细修复
+  // 裁剪原尺寸 ROI 数据
+  var roiCanvas = document.createElement('canvas');
+  roiCanvas.width = roi.w; roiCanvas.height = roi.h;
+  var roiCtx = roiCanvas.getContext('2d');
+  roiCtx.drawImage(fullCanvas, roi.minX, roi.minY, roi.w, roi.h, 0, 0, roi.w, roi.h);
+  var level3Src = roiCtx.getImageData(0, 0, roi.w, roi.h);
+
+  // mask
+  var roiMaskCanvas = document.createElement('canvas');
+  roiMaskCanvas.width = roi.w; roiMaskCanvas.height = roi.h;
+  var roiMaskCtx = roiMaskCanvas.getContext('2d');
+  roiMaskCtx.imageSmoothingEnabled = false;
+  roiMaskCtx.drawImage(fullMaskCanvas, roi.minX, roi.minY, roi.w, roi.h, 0, 0, roi.w, roi.h);
+  var level3Mask = roiMaskCtx.getImageData(0, 0, roi.w, roi.h);
+  var mask3 = buildBinaryMask(level3Mask, roi.w, roi.h);
+
+  // 把 level2 结果升采样到 level3 作为初始化
+  upsampleInto(level2.src, level2.w, level2.h, level3Src, roi.w, roi.h, mask3);
+  structuredFill(level3Src, mask3, roi.w, roi.h, { searchR: Math.min(20, Math.max(8, Math.floor(Math.max(roi.w, roi.h) * 0.15))), iterations: 1 });
+
+  // Level 4: 细节增强（原尺寸，小窗口精修）
+  var refinedSrc = new ImageData(new Uint8ClampedArray(level3Src.data), roi.w, roi.h);
+  structuredFill(refinedSrc, mask3, roi.w, roi.h, { searchR: 5, iterations: 2 });
+
+  // ---- 回到全尺寸 ----
+  var result = new ImageData(new Uint8ClampedArray(srcData.data), width, height);
+  var resultCtx = fullCanvas.getContext('2d'); // 复用
   resultCtx.putImageData(srcData, 0, 0);
-  resultCtx.imageSmoothingEnabled = true;
-  resultCtx.imageSmoothingQuality = 'high';
-  resultCtx.drawImage(upCvs, 0, 0, sw, sh, minX, minY, roiW, roiH);
+  var roiCanvas2 = document.createElement('canvas');
+  roiCanvas2.width = roi.w; roiCanvas2.height = roi.h;
+  roiCanvas2.getContext('2d').putImageData(refinedSrc, 0, 0);
+  resultCtx.drawImage(roiCanvas2, roi.minX, roi.minY);
   var upData = resultCtx.getImageData(0, 0, width, height);
 
-  // ---- Step 5: 只替换原始 mask 区域的像素 ----
-  var result = new ImageData(new Uint8ClampedArray(srcData.data), width, height);
+  // 只替换 mask 像素
   for (var y = 0; y < height; y++) {
     for (var x = 0; x < width; x++) {
-      var idx = (y * width + x) * 4;
-      if (maskData.data[idx + 3] > 0) {
-        result.data[idx]     = upData.data[idx];
-        result.data[idx + 1] = upData.data[idx + 1];
-        result.data[idx + 2] = upData.data[idx + 2];
+      var idx2 = (y * width + x) * 4;
+      if (maskData.data[idx2 + 3] > 0) {
+        result.data[idx2]     = upData.data[idx2];
+        result.data[idx2 + 1] = upData.data[idx2 + 1];
+        result.data[idx2 + 2] = upData.data[idx2 + 2];
       }
     }
   }
 
-  // ---- Step 6: 边缘高斯融合，消除接缝 ----
-  blendEdgesSimple(result, srcData, maskData, width, height, minX, minY, maxX, maxY);
+  // 自适应边缘融合
+  blendEdgesV28(result, srcData, maskData, width, height, roi);
 
   return result;
 }
 
-// 泊松填充：Gauss-Seidel 迭代（仅处理 mask 像素，高性能）
-function poissonFill(data, mask, w, h) {
+// ---- 回退：简单扩散（当 ROI 太小时） ----
+function inpaintDirectSimple(srcData, maskData, width, height, roi) {
+  var result = new ImageData(new Uint8ClampedArray(srcData.data), width, height);
+  var dirs = [[-1,0],[1,0],[0,-1],[0,1],[-1,-1],[-1,1],[1,-1],[1,1]];
+  for (var iter = 0; iter < 5; iter++) {
+    var changed = false;
+    for (var y = roi.minY; y <= roi.maxY; y++) {
+      for (var x = roi.minX; x <= roi.maxX; x++) {
+        var idx = (y * width + x) * 4;
+        if (maskData.data[idx + 3] === 0) continue;
+        var rS = 0, gS = 0, bS = 0, cnt = 0;
+        for (var d = 0; d < dirs.length; d++) {
+          var nx = x + dirs[d][0], ny = y + dirs[d][1];
+          if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+          var ni = (ny * width + nx) * 4;
+          if (maskData.data[ni + 3] === 0) {
+            rS += result.data[ni]; gS += result.data[ni + 1]; bS += result.data[ni + 2];
+            cnt++;
+          }
+        }
+        if (cnt > 0) {
+          result.data[idx] = Math.round(rS / cnt);
+          result.data[idx + 1] = Math.round(gS / cnt);
+          result.data[idx + 2] = Math.round(bS / cnt);
+          changed = true;
+        }
+      }
+    }
+    if (!changed) break;
+  }
+  return result;
+}
+
+// ============================================================
+// 结构感知加权填充
+// 对每个 mask 像素，搜索窗口内的已知像素，
+// 权重 = 空间高斯距离 × 邻域颜色相似度
+// 这样纹理相似的区域贡献更大，自然保留纹理结构
+// ============================================================
+function structuredFill(data, mask, w, h, opts) {
+  var searchR = opts.searchR || 8;
+  var iterations = opts.iterations || 1;
+  var spatialSigma = searchR / 2.5;
+
+  // 收集 mask 像素并按到边界的距离排序（从外到内）
   var maskPixels = [];
   for (var y = 0; y < h; y++) {
     for (var x = 0; x < w; x++) {
-      if (mask[y * w + x]) maskPixels.push({ x: x, y: y });
+      if (!mask[y * w + x]) continue;
+      // 计算到最近已知像素的切比雪夫距离
+      var minD = searchR + 1;
+      for (var dy = -1; dy <= 1; dy++) {
+        for (var dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          var ny2 = y + dy, nx2 = x + dx;
+          if (nx2 < 0 || nx2 >= w || ny2 < 0 || ny2 >= h) continue;
+          if (!mask[ny2 * w + nx2]) { minD = 1; break; }
+        }
+        if (minD === 1) break;
+      }
+      maskPixels.push({ x:x, y:y, dist:minD });
     }
   }
   if (maskPixels.length === 0) return;
 
-  // 预计算每个 mask 像素的已知邻居（避免每次迭代重复计算）
-  var dirs = [[-1, 0], [1, 0], [0, -1], [0, 1]];
-  for (var pi = 0; pi < maskPixels.length; pi++) {
-    var p = maskPixels[pi];
-    p.nbrs = [];
-    for (var d = 0; d < 4; d++) {
-      var nx = p.x + dirs[d][0], ny = p.y + dirs[d][1];
-      if (nx >= 0 && nx < w && ny >= 0 && ny < h && !mask[ny * w + nx]) {
-        p.nbrs.push((ny * w + nx) * 4);
-      }
-    }
-  }
+  // 按距离排序：先处理靠近边界的像素
+  maskPixels.sort(function(a, b) { return a.dist - b.dist; });
 
-  // Gauss-Seidel 迭代：每个 mask 像素 = 已知邻居的平均值
-  // 收敛很快（每次迭代都是最新值），通常 200-500 次就够了
-  var maxIter = Math.min(800, maskPixels.length * 5);
-  var colorDiffThreshold = 0.5;
-  for (var iter = 0; iter < maxIter; iter++) {
-    var maxChange = 0;
+  // 如果 searchR 很大（粗粒度），减少采样以提速
+  var sampleStep = searchR > 15 ? 2 : 1;
+
+  for (var iter = 0; iter < iterations; iter++) {
     for (var pi = 0; pi < maskPixels.length; pi++) {
       var p = maskPixels[pi];
       var di = (p.y * w + p.x) * 4;
-      if (p.nbrs.length === 0) continue; // 孤立像素（极其罕见）
 
-      var rS = 0, gS = 0, bS = 0;
-      for (var n = 0; n < p.nbrs.length; n++) {
-        var ni = p.nbrs[n];
-        rS += data.data[ni];
-        gS += data.data[ni + 1];
-        bS += data.data[ni + 2];
-      }
-      var nR = rS / p.nbrs.length;
-      var nG = gS / p.nbrs.length;
-      var nB = bS / p.nbrs.length;
-
-      var dR = Math.abs(nR - data.data[di]);
-      if (dR > maxChange) maxChange = dR;
-
-      data.data[di]     = nR;
-      data.data[di + 1] = nG;
-      data.data[di + 2] = nB;
-      data.data[di + 3] = 255;
-    }
-    if (maxChange < colorDiffThreshold) break; // 已收敛
-  }
-
-  // 处理仍未被填充的孤立像素（罕见情况：用最近邻）
-  for (var pi = 0; pi < maskPixels.length; pi++) {
-    var p2 = maskPixels[pi];
-    var di2 = (p2.y * w + p2.x) * 4;
-    if (p2.nbrs.length === 0) {
-      // 找最近的非 mask 像素
-      var bestDist = Infinity, bestI = -1;
-      for (var q = 0; q < maskPixels.length; q++) {
-        if (maskPixels[q].nbrs.length > 0) {
-          var dx2 = p2.x - maskPixels[q].x, dy2 = p2.y - maskPixels[q].y;
-          var d2 = dx2 * dx2 + dy2 * dy2;
-          if (d2 < bestDist) { bestDist = d2; bestI = (maskPixels[q].y * w + maskPixels[q].x) * 4; }
+      // 收集当前像素的 3×3 邻域中已知像素的颜色（用于做模板匹配）
+      var nbrColors = [];
+      var nbrPos = [];
+      for (var dy = -1; dy <= 1; dy++) {
+        for (var dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          var ny3 = p.y + dy, nx3 = p.x + dx;
+          if (nx3 < 0 || nx3 >= w || ny3 < 0 || ny3 >= h) continue;
+          if (mask[ny3 * w + nx3]) continue;
+          var ni = (ny3 * w + nx3) * 4;
+          nbrColors.push([data.data[ni], data.data[ni+1], data.data[ni+2]]);
+          nbrPos.push([dx, dy]);
         }
       }
-      if (bestI >= 0) {
-        data.data[di2]     = data.data[bestI];
-        data.data[di2 + 1] = data.data[bestI + 1];
-        data.data[di2 + 2] = data.data[bestI + 2];
-        data.data[di2 + 3] = 255;
+
+      // 没有已知邻居 → 用更远的
+      if (nbrColors.length === 0) {
+        for (var dy2 = -2; dy2 <= 2; dy2++) {
+          for (var dx2 = -2; dx2 <= 2; dx2++) {
+            if (dx2 === 0 && dy2 === 0) continue;
+            if (Math.abs(dx2) <= 1 && Math.abs(dy2) <= 1) continue;
+            var ny4 = p.y + dy2, nx4 = p.x + dx2;
+            if (nx4 < 0 || nx4 >= w || ny4 < 0 || ny4 >= h) continue;
+            if (mask[ny4 * w + nx4]) continue;
+            var ni2 = (ny4 * w + nx4) * 4;
+            nbrColors.push([data.data[ni2], data.data[ni2+1], data.data[ni2+2]]);
+          }
+        }
+      }
+      if (nbrColors.length === 0) continue;
+
+      // 搜索窗口内的已知像素，计算权重
+      var rS = 0, gS = 0, bS = 0, wS = 0;
+      var minY2 = Math.max(0, p.y - searchR);
+      var maxY2 = Math.min(h - 1, p.y + searchR);
+      var minX2 = Math.max(0, p.x - searchR);
+      var maxX2 = Math.min(w - 1, p.x + searchR);
+
+      for (var sy = minY2; sy <= maxY2; sy += sampleStep) {
+        for (var sx = minX2; sx <= maxX2; sx += sampleStep) {
+          if (mask[sy * w + sx]) continue;
+          if (sx === p.x && sy === p.y) continue;
+          var si = (sy * w + sx) * 4;
+
+          // 空间权重：高斯距离
+          var dx2 = sx - p.x, dy2 = sy - p.y;
+          var dist = Math.sqrt(dx2 * dx2 + dy2 * dy2);
+
+          // 邻域相似度：对每个已知邻居，比较候选像素对应偏移位置的颜色
+          var simSum = 0, simCnt = 0;
+          for (var nb = 0; nb < nbrColors.length; nb++) {
+            var ox = nbrPos[nb][0], oy = nbrPos[nb][1];
+            var qx = sx + ox, qy = sy + oy;
+            if (qx < 0 || qx >= w || qy < 0 || qy >= h) continue;
+            if (mask[qy * w + qx]) continue;
+            var qi = (qy * w + qx) * 4;
+            var dR = data.data[qi] - nbrColors[nb][0];
+            var dG = data.data[qi+1] - nbrColors[nb][1];
+            var dB = data.data[qi+2] - nbrColors[nb][2];
+            // 高斯：颜色差越小，相似度越高
+            simSum += Math.exp(-(dR*dR + dG*dG + dB*dB) / 800);
+            simCnt++;
+          }
+          var similarity = simCnt > 0 ? simSum / simCnt : 0.3;
+
+          // 综合权重
+          var spatialW = Math.exp(-(dist * dist) / (2 * spatialSigma * spatialSigma));
+          var weight = spatialW * similarity * similarity; // 平方增强相似度差异
+
+          rS += data.data[si] * weight;
+          gS += data.data[si + 1] * weight;
+          bS += data.data[si + 2] * weight;
+          wS += weight;
+        }
+      }
+
+      if (wS > 1e-9) {
+        data.data[di] = Math.round(rS / wS);
+        data.data[di + 1] = Math.round(gS / wS);
+        data.data[di + 2] = Math.round(bS / wS);
+        data.data[di + 3] = 255;
       }
     }
   }
 }
 
-// 简化版边缘融合：仅在 mask 周围 blurR 像素范围内做高斯混合
-function blendEdgesSimple(result, srcData, maskData, width, height, minX, minY, maxX, maxY) {
-  var blurR = 5;
-  // 只在 ROI + blurR 范围内操作，大幅减少计算量
-  var bMinX = Math.max(0, minX - blurR);
-  var bMinY = Math.max(0, minY - blurR);
-  var bMaxX = Math.min(width - 1, maxX + blurR);
-  var bMaxY = Math.min(height - 1, maxY + blurR);
-  var sigma = blurR / 2.5;
+// ---- 升采样 level(N-1) 结果到 level(N) ----
+function upsampleInto(srcSmall, sw, sh, dstLarge, dw, dh, dstMask) {
+  var tmpCanvas = document.createElement('canvas');
+  tmpCanvas.width = sw; tmpCanvas.height = sh;
+  var tmpCtx = tmpCanvas.getContext('2d');
+  tmpCtx.putImageData(srcSmall, 0, 0);
+
+  var bigCanvas = document.createElement('canvas');
+  bigCanvas.width = dw; bigCanvas.height = dh;
+  var bigCtx = bigCanvas.getContext('2d');
+  bigCtx.imageSmoothingEnabled = true;
+  bigCtx.imageSmoothingQuality = 'high';
+  bigCtx.drawImage(tmpCanvas, 0, 0, sw, sh, 0, 0, dw, dh);
+  var upData = bigCtx.getImageData(0, 0, dw, dh);
+
+  // 只覆盖 mask 像素
+  for (var i = 0; i < dw * dh; i++) {
+    if (dstMask[i]) {
+      dstLarge.data[i * 4]     = upData.data[i * 4];
+      dstLarge.data[i * 4 + 1] = upData.data[i * 4 + 1];
+      dstLarge.data[i * 4 + 2] = upData.data[i * 4 + 2];
+    }
+  }
+}
+
+// ============================================================
+// V28 边缘融合：双边式变宽度融合，保留更多细节
+// ============================================================
+function blendEdgesV28(result, srcData, maskData, width, height, roi) {
+  var blurR = 8; // 比 V27 更宽的融合带
+  var bMinX = Math.max(0, roi.minX - blurR);
+  var bMinY = Math.max(0, roi.minY - blurR);
+  var bMaxX = Math.min(width - 1, roi.maxX + blurR);
+  var bMaxY = Math.min(height - 1, roi.maxY + blurR);
+
+  // 预计算距离图（到最近 mask 像素的距离）
+  // 用扩大范围避免每次内循环重复搜索
+  var dMinX = Math.max(0, roi.minX - blurR - 2);
+  var dMinY = Math.max(0, roi.minY - blurR - 2);
+  var dMaxX = Math.min(width - 1, roi.maxX + blurR + 2);
+  var dMaxY = Math.min(height - 1, roi.maxY + blurR + 2);
 
   for (var y = bMinY; y <= bMaxY; y++) {
     for (var x = bMinX; x <= bMaxX; x++) {
       var idx = (y * width + x) * 4;
-      if (maskData.data[idx + 3] > 0) continue; // 跳过 mask 内部
+      if (maskData.data[idx + 3] > 0) continue; // mask 内部跳过
 
-      // 计算到最近 mask 像素的距离（在 blurR 范围内搜索）
+      // 计算到最近 mask 像素的距离
       var minDist = blurR + 1;
-      var searchEnd = Math.min(blurR, Math.max(Math.abs(x - minX), Math.abs(x - maxX), Math.abs(y - minY), Math.abs(y - maxY)));
-      if (searchEnd < 0) searchEnd = blurR;
-      for (var dy = -blurR; dy <= blurR; dy++) {
-        var ny = y + dy;
-        if (ny < 0 || ny >= height) continue;
-        for (var dx = -blurR; dx <= blurR; dx++) {
-          var nx = x + dx;
-          if (nx < 0 || nx >= width) continue;
-          if (maskData.data[(ny * width + nx) * 4 + 3] > 0) {
-            var dist = Math.sqrt(dx * dx + dy * dy);
-            if (dist < minDist) minDist = dist;
+      // 优化：从内到外搜索
+      var searchEnd = blurR;
+      var found = false;
+      for (var r = 1; r <= searchEnd && !found; r++) {
+        for (var dy = -r; dy <= r && !found; dy++) {
+          var ny = y + dy;
+          if (ny < 0 || ny >= height) continue;
+          for (var dx = -r; dx <= r && !found; dx++) {
+            if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue; // 只检查外圈
+            var nx = x + dx;
+            if (nx < 0 || nx >= width) continue;
+            if (maskData.data[(ny * width + nx) * 4 + 3] > 0) {
+              minDist = Math.sqrt(dx * dx + dy * dy);
+              found = true;
+            }
           }
         }
       }
       if (minDist > blurR) continue;
 
-      // 高斯权重：越靠近 mask 边界，越信任修复结果
-      var t = Math.exp(-(minDist * minDist) / (2 * sigma * sigma));
+      // 双边式权重：考虑距离 + 颜色差异
+      var sigmaDist = blurR / 3;
+      var dt = Math.exp(-(minDist * minDist) / (2 * sigmaDist * sigmaDist));
+
+      // 颜色差异调整：如果修复区域与原始颜色接近，更信任修复结果
+      var dR = Math.abs(result.data[idx] - srcData.data[idx]);
+      var dG = Math.abs(result.data[idx + 1] - srcData.data[idx + 1]);
+      var dB = Math.abs(result.data[idx + 2] - srcData.data[idx + 2]);
+      var colorDiff = (dR + dG + dB) / 3;
+      // 颜色差异大 → 降低修复权重（可能是修复异常，保留原图）
+      var colorWeight = Math.exp(-colorDiff / 80);
+      var t = dt * (0.5 + 0.5 * colorWeight); // 距离和颜色各占一半
 
       result.data[idx]     = Math.round(result.data[idx] * t + srcData.data[idx] * (1 - t));
       result.data[idx + 1] = Math.round(result.data[idx + 1] * t + srcData.data[idx + 1] * (1 - t));
