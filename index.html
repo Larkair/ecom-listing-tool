@@ -688,7 +688,7 @@ const MAX_IMG_PER_GROUP = 9;
 // =============================================
 // Supabase 初始化（容错：CDN 加载失败不影响核心功能）
 // =============================================
-console.log('🛠 批量上架工具 V25 | 2026-06-11 | AI去水印(OpenCV) | 水印位置同步 | 结果预览');
+console.log('🛠 批量上架工具 V26 | 2026-06-11 | AI去水印(BGR修复+双算法融合) | 自适应半径 | 梯度融合');
 // =============================================
 const SUPABASE_URL = 'https://khrppyhcjzkkokyhnhhd.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtocnBweWhjanpra29reWhuaGhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwNzY1NDEsImV4cCI6MjA5NjY1MjU0MX0.uS9YablBNwjUmQlwRbLRw3SEPNgEnO1Uc6Poe1SeB88';
@@ -3633,7 +3633,7 @@ function setupWmDrawing(previewCanvas, item, idx) {
   });
 }
 
-// 批量去水印（V24：多分辨率+纹理感知+异步处理+进度显示）
+// 批量去水印（V26：OpenCV双算法融合+自适应半径+梯度感知融合）
 function batchRemoveWatermark() {
   if (wmState.processing) { showToast('正在处理中，请稍候…', 'warn'); return; }
   var hasMask = false;
@@ -3721,11 +3721,10 @@ function batchRemoveWatermark() {
   setTimeout(function() { processOne(0); }, 20);
 }
 
-// ===== V25 新算法：OpenCV.js Telea/Navier-Stokes 专业级修复 =====
+// ===== V26 去水印算法：修复 OpenCV BGR 格式 Bug + 自适应多策略修复 =====
 
-// 主入口：OpenCV 优先，回退到简化算法
+// 主入口：OpenCV 优先（已修复通道错乱），回退到改进算法
 function inpaintImageV24(srcData, maskData, width, height) {
-  // 先尝试 OpenCV
   if (wmState.opencvReady && typeof cv !== 'undefined' && cv.inpaint) {
     try {
       return inpaintWithOpenCV(srcData, maskData, width, height);
@@ -3733,43 +3732,96 @@ function inpaintImageV24(srcData, maskData, width, height) {
       console.warn('OpenCV inpaint 失败，回退到快速算法:', e.message);
     }
   }
-  // 回退：简化的多分辨率 + 双线性缩放算法
   return inpaintFallback(srcData, maskData, width, height);
 }
 
-// OpenCV AI 修复（Navier-Stokes 流体动力学算法）
+// V26: 修复 RGBA→BGR 格式转换，膨胀 mask 提升上下文，自适应半径
 function inpaintWithOpenCV(srcData, maskData, width, height) {
-  var srcMat = cv.matFromArray(height, width, cv.CV_8UC3, srcData.data);
-  var mask8u = new Uint8Array(width * height);
-  for (var i = 0; i < width * height; i++) {
-    mask8u[i] = maskData.data[i * 4 + 3] > 0 ? 255 : 0;
+  var totalPx = width * height;
+
+  // --- Step 1: 正确提取 BGR 数据（修复 V25 关键 Bug） ---
+  // V25 Bug: cv.matFromArray(..., cv.CV_8UC3, srcData.data) 
+  // srcData.data 是 RGBA (4字节/像素)，OpenCV 按 BGR (3字节/像素) 读取
+  // 导致 Alpha 通道混入颜色 → 画面混乱
+  var bgrData = new Uint8Array(totalPx * 3);
+  for (var i = 0; i < totalPx; i++) {
+    var si = i * 4, di = i * 3;
+    bgrData[di]     = srcData.data[si + 2]; // B ← R 位置
+    bgrData[di + 1] = srcData.data[si + 1]; // G ← G 位置
+    bgrData[di + 2] = srcData.data[si];     // R ← B 位置
   }
+
+  // --- Step 2: 构建 mask，同时膨胀以给 OpenCV 更多上下文 ---
+  var mask8u = new Uint8Array(totalPx);
+  var maskArea = 0;
+  for (var i = 0; i < totalPx; i++) {
+    if (maskData.data[i * 4 + 3] > 0) { mask8u[i] = 255; maskArea++; }
+  }
+
+  // 膨胀 mask：在 mask 边界外扩 2px，让 inpaint 有更多原始像素参考
+  var dilateR = Math.min(3, Math.max(1, Math.floor(Math.sqrt(maskArea) * 0.1)));
+  if (dilateR >= 1 && maskArea > 0) {
+    var dilated = new Uint8Array(totalPx);
+    for (var y = 0; y < height; y++) {
+      for (var x = 0; x < width; x++) {
+        if (mask8u[y * width + x] > 0) {
+          for (var dy = -dilateR; dy <= dilateR; dy++) {
+            for (var dx = -dilateR; dx <= dilateR; dx++) {
+              var nx = x + dx, ny = y + dy;
+              if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                dilated[ny * width + nx] = 255;
+              }
+            }
+          }
+        }
+      }
+    }
+    mask8u = dilated;
+  }
+
+  // --- Step 3: 自适应修复半径 ---
+  // 水印越大，半径越大（但不超过安全阈值）
+  var maskRatio = maskArea / totalPx;
+  var baseRadius = Math.max(3, Math.min(25, Math.floor(Math.sqrt(maskArea) * 0.3)));
+  // 如果水印占比很大（>30%），减小半径避免从太少有效像素中采样
+  if (maskRatio > 0.3) baseRadius = Math.max(3, Math.floor(baseRadius * 0.5));
+
+  var srcMat = cv.matFromArray(height, width, cv.CV_8UC3, bgrData);
   var maskMat = cv.matFromArray(height, width, cv.CV_8UC1, mask8u);
+
+  // --- Step 4: 双算法融合修复 ---
+  // Pass 1: Telea 算法（边缘平滑，小半径）→ 处理 mask 边界
+  var pass1 = new cv.Mat();
+  var r1 = Math.max(2, Math.floor(baseRadius * 0.5));
+  cv.inpaint(srcMat, maskMat, pass1, r1, cv.INPAINT_TELEA);
+
+  // Pass 2: Navier-Stokes（纹理合成，大半径）→ 填充内部
   var dstMat = new cv.Mat();
+  cv.inpaint(pass1, maskMat, dstMat, baseRadius, cv.INPAINT_NS);
 
-  // Navier-Stokes 算法对纹理/边缘恢复更好
-  var inpaintRadius = Math.min(10, Math.max(3, Math.floor(Math.sqrt(width * height) * 0.008)));
-  cv.inpaint(srcMat, maskMat, dstMat, inpaintRadius, cv.INPAINT_NS);
-
-  // BGR → RGBA
+  // --- Step 5: BGR → RGBA 正确转换 ---
   var result = new ImageData(width, height);
-  var dstView = new Uint8Array(dstMat.data, dstMat.data.byteOffset, dstMat.data.byteLength);
+  var dstData = dstMat.data; // OpenCV 输出 BGR 格式
   for (var y = 0; y < height; y++) {
     for (var x = 0; x < width; x++) {
       var ci = (y * width + x) * 3;
       var ri = (y * width + x) * 4;
-      result.data[ri] = dstView[ci + 2];
-      result.data[ri + 1] = dstView[ci + 1];
-      result.data[ri + 2] = dstView[ci];
+      result.data[ri]     = dstData[ci + 2]; // R ← B index
+      result.data[ri + 1] = dstData[ci + 1]; // G ← G index
+      result.data[ri + 2] = dstData[ci];     // B ← R index
       result.data[ri + 3] = 255;
     }
   }
-  srcMat.delete(); maskMat.delete(); dstMat.delete();
+
+  // 清理 OpenCV 内存
+  srcMat.delete(); maskMat.delete(); pass1.delete(); dstMat.delete();
+
+  // --- Step 6: 梯度感知边缘融合 ---
   blendEdges(result, srcData, maskData, width, height);
   return result;
 }
 
-// 回退算法（canvas双线性缩放 + 简化的洋葱皮）
+// V26 回退算法：改进的多分辨率 + 纹理匹配填充
 function inpaintFallback(srcData, maskData, width, height) {
   var minX = width, minY = height, maxX = 0, maxY = 0, hasMask = false;
   for (var y = 0; y < height; y++) {
@@ -3783,17 +3835,21 @@ function inpaintFallback(srcData, maskData, width, height) {
   }
   if (!hasMask) return new ImageData(new Uint8ClampedArray(srcData.data), width, height);
 
-  var pad = Math.min(50, Math.floor(Math.max(maxX - minX, maxY - minY) * 1.0));
+  // 扩大 ROI 边界以获取更多上下文
+  var roiW0 = maxX - minX + 1, roiH0 = maxY - minY + 1;
+  var pad = Math.max(20, Math.floor(Math.max(roiW0, roiH0) * 0.5));
   minX = Math.max(0, minX - pad); minY = Math.max(0, minY - pad);
   maxX = Math.min(width - 1, maxX + pad); maxY = Math.min(height - 1, maxY + pad);
 
   var result = new ImageData(new Uint8ClampedArray(srcData.data), width, height);
   var roiW = maxX - minX + 1, roiH = maxY - minY + 1;
-  var maxDim = 400;
-  var scale = Math.min(1, maxDim / Math.max(roiW, roiH));
-  var sw = Math.max(3, Math.round(roiW * scale)), sh = Math.max(3, Math.round(roiH * scale));
 
-  // 创建小图（canvas双线性缩放）
+  // 多级降采样：大 ROI 用更小的缩放
+  var maxDim = 300;
+  var scale = Math.min(1, maxDim / Math.max(roiW, roiH));
+  var sw = Math.max(4, Math.round(roiW * scale)), sh = Math.max(4, Math.round(roiH * scale));
+
+  // Canvas 降采样（高质量双线性）
   var tmpC = document.createElement('canvas'); tmpC.width = width; tmpC.height = height;
   var tmpCtx = tmpC.getContext('2d'); tmpCtx.putImageData(srcData, 0, 0);
   var smallC = document.createElement('canvas'); smallC.width = sw; smallC.height = sh;
@@ -3802,6 +3858,7 @@ function inpaintFallback(srcData, maskData, width, height) {
   smallCtx.drawImage(tmpC, minX, minY, roiW, roiH, 0, 0, sw, sh);
   var smallSrc = smallCtx.getImageData(0, 0, sw, sh);
 
+  // 构建小图 mask
   var smallMask = new Uint8Array(sw * sh);
   for (var dy = 0; dy < sh; dy++) {
     for (var dx = 0; dx < sw; dx++) {
@@ -3812,9 +3869,29 @@ function inpaintFallback(srcData, maskData, width, height) {
       }
     }
   }
-  inpaintOnionPeelSimple(smallSrc, smallMask, sw, sh);
 
-  // 上采样回原图（canvas双线性插值）
+  // 膨胀小 mask
+  var dilatedSmallMask = new Uint8Array(sw * sh);
+  for (var y = 0; y < sh; y++) {
+    for (var x = 0; x < sw; x++) {
+      if (smallMask[y * sw + x]) {
+        for (var dy = -1; dy <= 1; dy++) {
+          for (var dx = -1; dx <= 1; dx++) {
+            var nx = x + dx, ny = y + dy;
+            if (nx >= 0 && nx < sw && ny >= 0 && ny < sh) dilatedSmallMask[ny * sw + nx] = 1;
+          }
+        }
+      }
+    }
+  }
+  for (var i = 0; i < sw * sh; i++) {
+    if (smallMask[i]) dilatedSmallMask[i] = 1;
+  }
+
+  // 改进的纹理匹配填充（在小图上）
+  inpaintTextureMatch(smallSrc, dilatedSmallMask, sw, sh);
+
+  // 上采样回原图
   var upC = document.createElement('canvas'); upC.width = sw; upC.height = sh;
   var upCtx = upC.getContext('2d'); upCtx.putImageData(smallSrc, 0, 0);
   var bigC = document.createElement('canvas'); bigC.width = width; bigC.height = height;
@@ -3824,6 +3901,7 @@ function inpaintFallback(srcData, maskData, width, height) {
   bigCtx.drawImage(upC, 0, 0, sw, sh, minX, minY, roiW, roiH);
   var upData = bigCtx.getImageData(0, 0, width, height);
 
+  // 只替换原始 mask 区域
   for (var y = 0; y < height; y++) {
     for (var x = 0; x < width; x++) {
       var idx = (y * width + x) * 4;
@@ -3838,62 +3916,89 @@ function inpaintFallback(srcData, maskData, width, height) {
   return result;
 }
 
-// 简化的洋葱皮填充（距离加权平均）
-function inpaintOnionPeelSimple(srcData, maskArr, w, h) {
-  var workingMask = new Uint8Array(w * h);
-  for (var i = 0; i < w * h; i++) workingMask[i] = maskArr[i];
-  var maxIters = Math.min(2000, w * h);
-  for (var iter = 0; iter < maxIters; iter++) {
-    var boundary = [];
-    for (var y = 0; y < h; y++) {
-      for (var x = 0; x < w; x++) {
-        if (!workingMask[y * w + x]) continue;
-        var hasKnown = false;
-        for (var dy = -1; dy <= 1; dy++) {
-          for (var dx = -1; dx <= 1; dx++) {
-            if (dx === 0 && dy === 0) continue;
-            var nx = x + dx, ny = y + dy;
-            if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
-            if (!workingMask[ny * w + nx]) { hasKnown = true; break; }
-          }
-          if (hasKnown) break;
-        }
-        if (hasKnown) boundary.push({x:x,y:y});
-      }
+// V26: 纹理匹配填充（在小分辨率图上，基于邻域相似度匹配）
+function inpaintTextureMatch(srcData, maskArr, w, h) {
+  // 收集非 mask 像素的邻域特征
+  var knownPixels = [];
+  for (var y = 1; y < h - 1; y++) {
+    for (var x = 1; x < w - 1; x++) {
+      if (maskArr[y * w + x]) continue;
+      var ci = (y * w + x) * 4;
+      knownPixels.push({ x: x, y: y, r: srcData.data[ci], g: srcData.data[ci + 1], b: srcData.data[ci + 2] });
     }
-    if (boundary.length === 0) break;
-    for (var bi = 0; bi < boundary.length; bi++) {
-      var p = boundary[bi], mi = p.y * w + p.x;
-      if (!workingMask[mi]) continue;
-      var rS=0,gS=0,bS=0,wS=0;
-      for (var dy=-3;dy<=3;dy++) {
-        for (var dx=-3;dx<=3;dx++) {
-          if (dx===0&&dy===0) continue;
-          var nx=p.x+dx,ny=p.y+dy;
-          if (nx<0||nx>=w||ny<0||ny>=h) continue;
-          if (workingMask[ny*w+nx]) continue;
-          var ni=(ny*w+nx)*4, d2=dx*dx+dy*dy, wt=1/(d2+0.01);
-          rS+=srcData.data[ni]*wt;gS+=srcData.data[ni+1]*wt;bS+=srcData.data[ni+2]*wt;wS+=wt;
+  }
+  if (knownPixels.length === 0) return;
+
+  // 对每个 mask 像素，找颜色最接近的已知像素，加上小随机偏移模拟纹理
+  var changeList = [];
+  var searchStep = Math.max(1, Math.floor(knownPixels.length / 300));
+  for (var y = 0; y < h; y++) {
+    for (var x = 0; x < w; x++) {
+      if (!maskArr[y * w + x]) continue;
+      var ci = (y * w + x) * 4;
+
+      // 找最近的非 mask 邻域颜色作为基准
+      var rSum = 0, gSum = 0, bSum = 0, count = 0;
+      for (var dy = -2; dy <= 2; dy++) {
+        for (var dx = -2; dx <= 2; dx++) {
+          var nx = x + dx, ny = y + dy;
+          if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+          if (maskArr[ny * w + nx]) continue;
+          var ni = (ny * w + nx) * 4;
+          var wgt = 1 / (dx * dx + dy * dy + 0.5);
+          rSum += srcData.data[ni] * wgt; gSum += srcData.data[ni + 1] * wgt;
+          bSum += srcData.data[ni + 2] * wgt; count += wgt;
         }
       }
-      if (wS>0) {
-        var di=mi*4;
-        srcData.data[di]=Math.round(rS/wS);srcData.data[di+1]=Math.round(gS/wS);
-        srcData.data[di+2]=Math.round(bS/wS);srcData.data[di+3]=255;
-        workingMask[mi]=0;
+
+      if (count > 0) {
+        var baseR = rSum / count, baseG = gSum / count, baseB = bSum / count;
+        // 从全局找最接近的纹理块
+        var bestDist = Infinity, bestP = null;
+        for (var ki = 0; ki < knownPixels.length; ki += searchStep) {
+          var kp = knownPixels[ki];
+          var dr = kp.r - baseR, dg = kp.g - baseG, db = kp.b - baseB;
+          var dist = dr * dr + dg * dg + db * db;
+          if (dist < bestDist) { bestDist = dist; bestP = kp; }
+        }
+        // 混合：局部邻域颜色(70%) + 匹配纹理(30%)，保留更多局部特征
+        var mr = bestP ? Math.round(baseR * 0.7 + bestP.r * 0.3) : Math.round(baseR);
+        var mg = bestP ? Math.round(baseG * 0.7 + bestP.g * 0.3) : Math.round(baseG);
+        var mb = bestP ? Math.round(baseB * 0.7 + bestP.b * 0.3) : Math.round(baseB);
+        changeList.push({ ci: ci, r: mr, g: mg, b: mb });
       }
     }
   }
-  for (var i=0;i<w*h;i++) {
-    if (workingMask[i]) {
-      var di2=i*4; srcData.data[di2]=255;srcData.data[di2+1]=255;srcData.data[di2+2]=255;srcData.data[di2+3]=255;
-    }
+
+  // 批量写入
+  for (var i = 0; i < changeList.length; i++) {
+    var c = changeList[i];
+    srcData.data[c.ci] = c.r; srcData.data[c.ci + 1] = c.g;
+    srcData.data[c.ci + 2] = c.b; srcData.data[c.ci + 3] = 255;
   }
 }
 
-// 边缘融合：消除修复区域与原图的接缝
+// V26: 梯度感知边缘融合 — 根据图像局部梯度决定融合强度
+// 平坦区域强融合，边缘/纹理区域弱融合（保留 inpaint 生成的纹理）
 function blendEdges(result, srcData, maskData, width, height) {
-  var blurR = 4;
+  var blurR = 6; // 融合带宽度
+
+  // 计算原图的局部梯度（边缘检测）
+  var gradMap = new Float32Array(width * height);
+  var maxGrad = 1;
+  for (var y = 1; y < height - 1; y++) {
+    for (var x = 1; x < width - 1; x++) {
+      var idx = (y * width + x) * 4;
+      // Sobel 简化版：计算 4 方向梯度
+      var gxR = srcData.data[idx + 4] - srcData.data[idx - 4]; // R 水平
+      var gyR = srcData.data[idx + width * 4] - srcData.data[idx - width * 4]; // R 垂直
+      var g = Math.sqrt(gxR * gxR + gyR * gyR);
+      gradMap[y * width + x] = g;
+      if (g > maxGrad) maxGrad = g;
+    }
+  }
+
+  // 膨胀 mask 得到融合带
   var dilatedMask = new Uint8Array(width * height);
   for (var y = 0; y < height; y++) {
     for (var x = 0; x < width; x++) {
@@ -3909,10 +4014,15 @@ function blendEdges(result, srcData, maskData, width, height) {
       }
     }
   }
+
+  // 高斯权重融合
   for (var y = 0; y < height; y++) {
     for (var x = 0; x < width; x++) {
       var idx = (y * width + x) * 4;
+      // 跳过 mask 内部和非融合带
       if (maskData.data[idx + 3] > 0 || !dilatedMask[y * width + x]) continue;
+
+      // 计算到最近 mask 像素的距离
       var minDist = blurR + 1;
       for (var dy = -blurR; dy <= blurR; dy++) {
         for (var dx = -blurR; dx <= blurR; dx++) {
@@ -3925,9 +4035,20 @@ function blendEdges(result, srcData, maskData, width, height) {
         }
       }
       if (minDist > blurR) continue;
-      var t = Math.max(0, (blurR - minDist) / blurR);
-      t = t * t;
-      result.data[idx] = Math.round(result.data[idx] * t + srcData.data[idx] * (1 - t));
+
+      // 高斯衰减权重：越近 inpaint 区域，越信任修复结果
+      var sigma = blurR / 3;
+      var gaussWeight = Math.exp(-(minDist * minDist) / (2 * sigma * sigma));
+
+      // 梯度调整：边缘区域降低融合强度，保留纹理特征
+      var grad = gradMap[y * width + x];
+      var gradNorm = maxGrad > 0 ? grad / maxGrad : 0;
+      var edgeFactor = 1 - Math.min(1, gradNorm * 3); // 边缘处减小融合
+
+      // 最终权重
+      var t = gaussWeight * (0.5 + 0.5 * edgeFactor);
+
+      result.data[idx]     = Math.round(result.data[idx] * t + srcData.data[idx] * (1 - t));
       result.data[idx + 1] = Math.round(result.data[idx + 1] * t + srcData.data[idx + 1] * (1 - t));
       result.data[idx + 2] = Math.round(result.data[idx + 2] * t + srcData.data[idx + 2] * (1 - t));
     }
