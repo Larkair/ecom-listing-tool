@@ -2555,7 +2555,7 @@ async function exportExcelWithTemplate() {
   // 7. 导出整个工作簿（保留所有 sheet）
   showToast('正在生成 Excel 文件…', 'info');
   const pNames = { shopee:'Shopee', lazada:'Lazada', tiktok:'TikTok' };
-  const timestamp = new Date().toLocaleDateString('zh-CN').replace(///g,'-');
+  const timestamp = new Date().toLocaleDateString('zh-CN').split('/').join('-');
   const filename = pNames[platform] + '_批量上架_' + timestamp + '.xlsx';
   XLSX.writeFile(wb, filename);
   
