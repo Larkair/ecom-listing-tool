@@ -834,7 +834,14 @@ async function uploadImageToStorage(dataUrl, filename) {
     const { data, error } = await sb.storage
       .from('product-images')
       .upload(filePath, blob, { contentType: mime, upsert: false });
-    if (error) { console.warn('图床上传失败(可能Bucket未创建):', error.message || error); return null; }
+    if (error) {
+      console.warn('图床上传失败:', error.message || error);
+      // 如果是 bucket 不存在的错误，给出明确提示
+      if (error.message && error.message.includes('Bucket not found')) {
+        console.warn('Supabase Storage 中未找到 "product-images" Bucket，请在 Dashboard 中创建，并设置为 Public，同时添加 anon 的 INSERT 和 SELECT 策略。');
+      }
+      return null;
+    }
     if (!data || !data.path) { console.warn('图床上传返回无path'); return null; }
     const { data: urlData } = sb.storage.from('product-images').getPublicUrl(data.path);
     return urlData && urlData.publicUrl ? urlData.publicUrl : null;
@@ -1955,7 +1962,7 @@ function buildExportData() {
   const products = state.products[state.platform];
   const headers = fields.map(f => f.name);
   var colCount = fields.length;
-  var rows = [headers];
+  var rows = [];
 
   // 找出图片类字段（按顺序），SKU图字段单独分组
   var imgFields = fields.map(function(f,i){ return {f:f, i:i}; }).filter(function(item){
@@ -2111,7 +2118,7 @@ function buildExportData() {
     templateRowCount = alignedRows.length;
   }
 
-  return { rows: rows, linkStarts: linkStarts, templateRowCount: templateRowCount, headerRowIdx: templateRowCount };
+  return { rows: rows, linkStarts: linkStarts, templateRowCount: templateRowCount, headerRowIdx: -1 };
 }
 
 // =============================================
@@ -2141,8 +2148,12 @@ async function refreshPreview() {
     var templateRowCount = result.templateRowCount;
     var headerRowIdx = result.headerRowIdx;
 
-    // headerRowIdx = 字段名行（模板行之后第一行）
-    var dataStartIdx = headerRowIdx + 1; // 数据从字段名行之后开始
+    var dataStartIdx;
+    if (headerRowIdx >= 0) {
+      dataStartIdx = headerRowIdx + 1;
+    } else {
+      dataStartIdx = templateRowCount; // 无字段名行，数据从模板行之后开始
+    }
     var totalLinks = products.reduce(function(s,p){ return s + Math.max(1, p.images.length); }, 0);
     var dataRowCount = rows.length - dataStartIdx;
     var colCount = rows[0] ? rows[0].length : 0;
@@ -2154,8 +2165,8 @@ async function refreshPreview() {
     // 构建表格
     var table = document.createElement('table');
 
-    // thead = 字段名行
-    if (rows.length > headerRowIdx) {
+    // thead = 字段名行（仅当 headerRowIdx >= 0 时）
+    if (headerRowIdx >= 0 && rows.length > headerRowIdx) {
       var thead = document.createElement('thead');
       var hr = document.createElement('tr');
       rows[headerRowIdx].forEach(function(h) {
@@ -2284,9 +2295,9 @@ async function exportExcel() {
     var result = buildExportData();
     var rows = result.rows;
 
-    // 收集图片单元格
+    // 收集图片单元格（跳过模板行）
     var imgCells = [];
-    for (var ri = 1; ri < rows.length; ri++) {
+    for (var ri = result.templateRowCount; ri < rows.length; ri++) {
       var row = rows[ri];
       for (var ci = 0; ci < row.length; ci++) {
         if (typeof row[ci] === 'string' && row[ci].startsWith('data:image')) {
@@ -2317,7 +2328,7 @@ async function exportExcel() {
             if (r.url) {
               rows[r.ri][r.ci] = r.url;
             } else {
-              rows[r.ri][r.ci] = '[图片:上传失败-请检查product-images Bucket]';
+              rows[r.ri][r.ci] = '[图片:上传失败，请检查 Supabase Storage 是否创建了 product-images Bucket 并设为 Public]';
               failCount++;
             }
           });
