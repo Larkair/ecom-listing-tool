@@ -193,7 +193,7 @@
     .img-count-full { background: #fee2e2; color: #dc2626; }
 
     /* AI标题 */
-    .ai-title-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .ai-title-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
     .ai-title-part { background: #f8faff; border: 1.5px solid var(--border); border-radius: var(--radius); padding: 14px; }
     .ai-title-part-hd { font-weight: 600; font-size: .85rem; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
     .ai-title-part-hd .cbadge { width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center;
@@ -688,7 +688,7 @@ const MAX_IMG_PER_GROUP = 9;
 // =============================================
 // Supabase 初始化（容错：CDN 加载失败不影响核心功能）
 // =============================================
-console.log('🛠 批量上架工具 V26 | 2026-06-11 | AI去水印(BGR修复+双算法融合) | 自适应半径 | 梯度融合');
+console.log('🛠 批量上架工具 V26 | 2026-06-11 | 图片列动态生成 | 标题10部分去重 | BGR修复+梯度融合');
 // =============================================
 const SUPABASE_URL = 'https://khrppyhcjzkkokyhnhhd.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtocnBweWhjanpra29reWhuaGhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwNzY1NDEsImV4cCI6MjA5NjY1MjU0MX0.uS9YablBNwjUmQlwRbLRw3SEPNgEnO1Uc6Poe1SeB88';
@@ -745,7 +745,7 @@ async function loadFromSupabase() {
         product.images = product.images || [];
         product.fixedDetailImages = product.fixedDetailImages || [];
         product.fieldValues = product.fieldValues || {};
-        product.aiTitleParts = product.aiTitleParts || ['','','',''];
+        product.aiTitleParts = product.aiTitleParts || ['','','','','','','','','',''];
         product.generatedTitles = product.generatedTitles || [];
         product.selectedTitle = product.selectedTitle || '';
         product.startCode = product.startCode || '';
@@ -824,7 +824,7 @@ async function syncToSupabase() {
           name: p.name,
           product_data: { images, fixedDetailImages: fdi, sizeChart: sc,
             startCode: p.startCode || '', fieldValues: p.fieldValues || {},
-            aiTitleParts: p.aiTitleParts || ['','','',''],
+            aiTitleParts: p.aiTitleParts || ['','','','','','','','','',''],
             generatedTitles: p.generatedTitles || [], selectedTitle: p.selectedTitle || '' },
           sort_order: i, updated_at: new Date().toISOString()
         };
@@ -1871,7 +1871,7 @@ function addNewProduct() {
     sizeChart: null,   // dataUrl
     startCode: '',     // 自动排序起始编码
     fieldValues: {},   // key -> value
-    aiTitleParts: ['','','',''],
+    aiTitleParts: ['','','','','','','','','',''],
     generatedTitles: [],
     selectedTitle: ''
   };
@@ -1989,10 +1989,13 @@ function renderProductForm(idx) {
         <!-- ④ AI标题 -->
         <div id="tab-title" class="tab-pane">
           <div class="section-title"><div class="num">④</div> AI 标题生成器</div>
-          <p class="text-sm text-muted" style="margin-bottom:16px">在4个词汇库中各填入词汇，系统随机组合生成标题</p>
+          <p class="text-sm text-muted" style="margin-bottom:16px">在10个词汇库中各填入词汇（每行一个），系统随机组合生成不重复标题</p>
           <div class="ai-title-grid">
-            ${[{label:'部分①',hint:'产品类型/品类',cls:'b1'},{label:'部分②',hint:'风格/特点',cls:'b2'},
-               {label:'部分③',hint:'材质/工艺',cls:'b3'},{label:'部分④',hint:'适用场景/人群',cls:'b4'}
+            ${[{label:'①产品类型',hint:'品类/类目',cls:'b1'},{label:'②核心卖点',hint:'主打特性',cls:'b2'},
+               {label:'③风格定位',hint:'设计风格',cls:'b3'},{label:'④材质面料',hint:'材质/成分',cls:'b4'},
+               {label:'⑤工艺技术',hint:'制作工艺',cls:'b1'},{label:'⑥适用场景',hint:'使用场合',cls:'b2'},
+               {label:'⑦适用人群',hint:'目标用户',cls:'b3'},{label:'⑧颜色外观',hint:'颜色/图案',cls:'b4'},
+               {label:'⑨功能特性',hint:'特色功能',cls:'b1'},{label:'⑩品牌系列',hint:'品牌/系列名',cls:'b2'}
               ].map((p,pi)=>`
               <div class="ai-title-part">
                 <div class="ai-title-part-hd"><span class="cbadge ${p.cls}">${pi+1}</span>${p.label}<span class="text-muted text-sm">（${p.hint}）</span></div>
@@ -2362,17 +2365,30 @@ function generateTitles(idx) {
   const maxLen = state.settings.maxTitleLen;
   const titles = new Set();
   let attempts = 0;
-  while (titles.size < count && attempts < count * 30) {
+  var maxAttempts = count * 60;
+  while (titles.size < count && attempts < maxAttempts) {
     attempts++;
-    const picked = parts.map(p => p.length > 0 ? p[Math.floor(Math.random() * p.length)] : '').filter(Boolean);
-    if (picked.length === 0) continue;
-    let title = picked.join(sep);
+    // V26: 确保每部分选词不重复（除非某部分只有唯一选项）
+    var picked = new Array(parts.length);
+    var usedWords = new Set();
+    for (var pi = 0; pi < parts.length; pi++) {
+      if (parts[pi].length === 0) { picked[pi] = ''; continue; }
+      // 过滤掉已被其他部分选过的词
+      var available = parts[pi].length === 1 ? parts[pi] : parts[pi].filter(function(w) { return !usedWords.has(w); });
+      if (available.length === 0) available = parts[pi]; // 回退：允许不得已的重复
+      var chosen = available[Math.floor(Math.random() * available.length)];
+      picked[pi] = chosen;
+      if (chosen) usedWords.add(chosen);
+    }
+    var validPicked = picked.filter(Boolean);
+    if (validPicked.length === 0) continue;
+    let title = validPicked.join(sep);
     if (title.length > maxLen) title = title.substring(0, maxLen);
     titles.add(title);
   }
   product.generatedTitles = [...titles];
   document.getElementById('titleResults_' + idx).innerHTML = renderTitleResults(product);
-  showToast(`成功生成 ${titles.size} 个标题`, 'success');
+  showToast('成功生成 ' + titles.size + ' 个标题', 'success');
 }
 
 function renderTitleResults(product) {
@@ -2488,6 +2504,24 @@ function buildExportData(includeTemplate) {
   var imgFields = fields.map(function(f,i){ return {f:f, i:i}; }).filter(function(item){
     return item.f.assoc === '链接图片管理' || item.f.mode === 'image';
   });
+  // V26: 动态计算需要多少图片列 — 修复"上传多张图只显示2张"的 Bug
+  // 原逻辑：图片列数 = 配置的图片字段数，超出部分图片被丢弃
+  // 修复后：自动追加额外列（附图N），确保所有图片都出现在导出中
+  var maxAllLinkImgs = 0;
+  products.forEach(function(product) {
+    for (var pli = 0; pli < Math.max(1, product.images.length); pli++) {
+      var lImgs = (product.images[pli] && product.images[pli].files) ? product.images[pli].files.length : 0;
+      var fImgs = product.fixedDetailImages ? product.fixedDetailImages.length : 0;
+      if (lImgs + fImgs > maxAllLinkImgs) maxAllLinkImgs = lImgs + fImgs;
+    }
+  });
+  var extraImgCols = Math.max(0, maxAllLinkImgs - imgFields.length);
+  if (extraImgCols > 0) {
+    for (var ec = 0; ec < extraImgCols; ec++) {
+      headers.push('附图' + (imgFields.length + ec + 1));
+    }
+    colCount = headers.length;
+  }
   var skuImgFields = fields.map(function(f,i){ return {f:f, i:i}; }).filter(function(item){
     return item.f.mode === 'sku_image';
   });
@@ -2587,6 +2621,12 @@ function buildExportData(includeTemplate) {
             return product.fieldValues[f.name] || '';
           });
 
+          // V26: 追加额外图片列 — 超出配置字段数的图片动态生成列
+          for (var ec = 0; ec < extraImgCols; ec++) {
+            var imgPos = imgFields.length + ec;
+            var extraImg = allLinkImages[imgPos];
+            row.push(extraImg ? extraImg.dataUrl : '');
+          }
           rows.push(row);
 
           // 记录链接首行（第一个style + 第一个size）
