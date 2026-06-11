@@ -627,7 +627,7 @@ const MAX_IMG_PER_GROUP = 9;
 // =============================================
 // Supabase 初始化（容错：CDN 加载失败不影响核心功能）
 // =============================================
-console.log('🛠 批量上架工具 V17.2 | 2026-06-11 | 模板基底导出 | JS语法检查通过');
+console.log('🛠 批量上架工具 V18 | 2026-06-11 | 新增按链接排序 | 模板基底导出');
 // =============================================
 const SUPABASE_URL = 'https://khrppyhcjzkkokyhnhhd.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtocnBweWhjanpra29reWhuaGhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwNzY1NDEsImV4cCI6MjA5NjY1MjU0MX0.uS9YablBNwjUmQlwRbLRw3SEPNgEnO1Uc6Poe1SeB88';
@@ -1191,6 +1191,8 @@ function renderFieldList() {
           <option value="sku_image"  ${f.mode==='sku_image'?'selected':''}>⑦ SKU图</option>
           <option value="size_chart" ${f.mode==='size_chart'?'selected':''}>⑧ 尺码表</option>
           <option value="auto_seq"   ${f.mode==='auto_seq' ?'selected':''}>⑨ 自动排序</option>
+
+          <option value="link_seq"   ${f.mode==='link_seq' ?'selected':''}>⑩ 按链接排序</option>
         </select>
       </td>
       <td class="field-extra-cell" id="fextra_${i}">${renderFieldExtra(f, i)}</td>
@@ -1227,6 +1229,8 @@ function renderFieldExtra(f, i) {
     return `<span class="mode-badge mode-sizechart">📏 尺码表（关联尺码表图片）</span>`;
   } else if (f.mode === 'auto_seq') {
     return `<input class="form-ctrl" style="font-size:.8rem" placeholder="起始编码（如 a0001）…" value="${escHtml(f.fixedValue||'')}" oninput="onFixedValueChange(${i},this.value)" />`;
+  } else if (f.mode === 'link_seq') {
+    return '<span class="mode-badge" style="background:#fef3c7;color:#d97706">🔢 按链接排序（从1开始，同链接同行号）</span>';
   }
   return '';
 }
@@ -1241,6 +1245,7 @@ function onModeChange(idx, mode) {
   if (mode === 'options') f.options = [];
   // 切换为自动排序时，保留起始编码
   if (mode === 'auto_seq' && !f.fixedValue) f.fixedValue = '';
+  if (mode === 'link_seq' && !f.fixedValue) f.fixedValue = '';
   // 自动关联 image/sku_image -> 链接图片管理, ai -> Ai标题, size_chart -> 尺码表图片
   if (mode === 'image' && !f.assoc) { f.assoc = '链接图片管理'; }
   if (mode === 'sku_image' && !f.assoc) { f.assoc = '链接图片管理'; }
@@ -2161,6 +2166,10 @@ function buildExportData(includeTemplate) {
     return item.f.assoc === '尺码表图片' || item.f.mode === 'size_chart';
   });
 
+  var linkSeqFields = fields.map(function(f,i){ return {f:f, i:i}; }).filter(function(item){ return item.f.mode === 'link_seq'; });
+  var linkSeqCounters = {};
+  linkSeqFields.forEach(function(item){ linkSeqCounters[item.i] = 1; });
+
   var autoSeqCounters = {};
   autoSeqFields.forEach(function(item){ autoSeqCounters[item.i] = null; });
 
@@ -2175,6 +2184,9 @@ function buildExportData(includeTemplate) {
 
     autoSeqFields.forEach(function(item){
       autoSeqCounters[item.i] = product.startCode || item.f.fixedValue || '';
+    });
+    linkSeqFields.forEach(function(item){
+      linkSeqCounters[item.i] = 1;
     });
 
     var titlesForLinks = [];
@@ -2201,6 +2213,9 @@ function buildExportData(includeTemplate) {
 
           var row = fields.map(function(f, fi) {
             if (f.mode === 'empty') return '';
+            if (f.mode === 'link_seq') {
+              return String(linkSeqCounters[fi] || 1);
+            }
             if (f.mode === 'auto_seq') {
               var code = autoSeqCounters[fi];
               autoSeqCounters[fi] = autoIncrementCode(autoSeqCounters[fi]);
@@ -2267,6 +2282,11 @@ function buildExportData(includeTemplate) {
         linkStarts.push({ dataRowIdx: dataRowIdx, title: linkTitle, dataUrl: linkFirstImageDataUrl });
       }
       isFirstStyle = false;
+
+    // 当前 link 处理完，递增 link_seq 计数器
+    linkSeqFields.forEach(function(item){
+      linkSeqCounters[item.i] = (linkSeqCounters[item.i] || 0) + 1;
+    });
     }
   });
 
