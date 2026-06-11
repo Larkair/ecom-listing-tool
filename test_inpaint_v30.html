@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>V30 FMM 算法验证</title>
+<style>
+  body { font-family: sans-serif; padding: 20px; background: #1a1a2e; color: #eee; max-width: 1100px; margin: 0 auto; }
+  h1 { color: #f59e0b; }
+  h3 { margin: 4px 0; color: #aaa; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 16px 0; }
+  .panel { background: #16213e; border-radius: 8px; padding: 10px; }
+  .panel img, .panel canvas { width: 100%; border-radius: 4px; border: 2px solid #333; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: .7rem; margin-bottom: 4px; }
+  .ok { background: #10b981; color: #fff; }
+  .warn { background: #f59e0b; color: #000; }
+  button { padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: .9rem; margin: 4px; }
+  .btn-primary { background: #f59e0b; color: #000; font-weight: bold; }
+  .btn-secondary { background: #333; color: #eee; }
+  .stats { background: #0f3460; padding: 12px; border-radius: 8px; margin: 12px 0; }
+  .stats code { color: #f59e0b; font-size: 1.1rem; }
+</style>
+</head>
+<body>
+<h1>🔬 V30 FMM 去水印算法验证</h1>
+<p style="color:#888">Telea Fast Marching Method — BFS距离图 + 桶排序逐层填充 + 梯度引导边缘保护</p>
+
+<div class="stats">
+  <div>测试结果：<code id="result"></code></div>
+</div>
+
+<div style="margin:12px 0">
+  <button class="btn-primary" onclick="runAllTests()">▶ 运行全部测试</button>
+  <button class="btn-secondary" onclick="runSingleTest(0)">测试1: 纯色</button>
+  <button class="btn-secondary" onclick="runSingleTest(1)">测试2: 渐变</button>
+  <button class="btn-secondary" onclick="runSingleTest(2)">测试3: 复杂纹理</button>
+</div>
+
+<div class="grid" id="grid"></div>
+
+<script>
+// ======= 内嵌 V30 FMM 算法（独立副本，不依赖外部文件）=======
+function inpaintFMM(srcData, maskData, width, height) {
+  var w = width, h = height, sz = w * h;
+
+  var known = new Uint8Array(sz);
+  var dist = new Float32Array(sz);
+  var INF = 1e9;
+  for (var i = 0; i < sz; i++) {
+    if (maskData.data[i * 4 + 3] > 0) {
+      known[i] = 0; dist[i] = INF;
+    } else {
+      known[i] = 1; dist[i] = 0;
+    }
+  }
+
+  var dirs4 = [[-1,0],[1,0],[0,-1],[0,1]];
+  var queue = [];
+
+  for (var y = 0; y < h; y++) {
+    for (var x = 0; x < w; x++) {
+      var idx = y * w + x;
+      if (known[idx]) continue;
+      var hasKnown = false;
+      for (var d = 0; d < 4; d++) {
+        var nx = x + dirs4[d][0], ny = y + dirs4[d][1];
+        if (nx >= 0 && nx < w && ny >= 0 && ny < h && known[ny * w + nx]) {
+          hasKnown = true; break;
+        }
+      }
+      if (hasKnown) { dist[idx] = 1; queue.push(idx); }
+    }
+  }
+
+  var qi = 0;
+  while (qi < queue.length) {
+    var idx = queue[qi++];
+    var x = idx % w, y = (idx / w) | 0;
+    var nd = dist[idx] + 1;
+    for (var d = 0; d < 4; d++) {
+      var nx = x + dirs4[d][0], ny = y + dirs4[d][1];
+      if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
+        var ni = ny * w + nx;
+        if (!known[ni] && nd < dist[ni]) {
+          dist[ni] = nd;
+          queue.push(ni);
+        }
+      }
+    }
+  }
+
+  // Gradient computation
+  var gradX = new Float32Array(sz);
+  var gradY = new Float32Array(sz);
+  for (var y = 1; y < h - 1; y++) {
+    for (var x = 1; x < w - 1; x++) {
+      var i2 = y * w + x;
+      var iL = i2 - 1, iR = i2 + 1, iU = i2 - w, iD = i2 + w;
+      gradX[i2] = (srcData.data[iR * 4] - srcData.data[iL * 4]) / 2 +
+                  (srcData.data[iR * 4 + 1] - srcData.data[iL * 4 + 1]) / 2 +
+                  (srcData.data[iR * 4 + 2] - srcData.data[iL * 4 + 2]) / 2;
+      gradY[i2] = (srcData.data[iD * 4] - srcData.data[iU * 4]) / 2 +
+                  (srcData.data[iD * 4 + 1] - srcData.data[iU * 4 + 1]) / 2 +
+                  (srcData.data[iD * 4 + 2] - srcData.data[iU * 4 + 2]) / 2;
+    }
+  }
+
+  var maxDist = 0;
+  for (var i = 0; i < sz; i++) { if (dist[i] > maxDist && dist[i] < INF) maxDist = dist[i]; }
+  var buckets = new Array(maxDist + 2);
+  for (var d = 0; d <= maxDist + 1; d++) buckets[d] = [];
+
+  for (var i = 0; i < sz; i++) {
+    if (!known[i]) buckets[dist[i]].push(i);
+  }
+
+  var radius = Math.min(6, Math.max(3, Math.ceil(maxDist * 0.3)));
+  var nbrOffsets = [];
+  for (var dy = -radius; dy <= radius; dy++) {
+    for (var dx = -radius; dx <= radius; dx++) {
+      if (dx === 0 && dy === 0) continue;
+      if (dx * dx + dy * dy <= radius * radius) {
+        nbrOffsets.push([dx, dy]);
+      }
+    }
+  }
+
+  var result = new Uint8ClampedArray(srcData.data.length);
+  result.set(srcData.data);
+  var filled = 0;
+
+  for (var d = 1; d <= maxDist; d++) {
+    var bucket = buckets[d];
+    if (!bucket.length) continue;
+
+    for (var bi = 0; bi < bucket.length; bi++) {
+      var idx = bucket[bi];
+      if (known[idx]) continue;
+
+      var x = idx % w, y = (idx / w) | 0;
+      var rS = 0, gS = 0, bS = 0, wS = 0;
+      var gx = gradX[idx], gy = gradY[idx];
+      var gradMag2 = gx * gx + gy * gy;
+
+      for (var ni = 0; ni < nbrOffsets.length; ni++) {
+        var dx = nbrOffsets[ni][0], dy = nbrOffsets[ni][1];
+        var nx = x + dx, ny = y + dy;
+        if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+        var nidx = ny * w + nx;
+        if (!known[nidx]) continue;
+
+        var dd = Math.sqrt(dx * dx + dy * dy);
+        var distW = 1.0 / (dd * dd + 0.001);
+
+        var gradW = 1.0;
+        if (gradMag2 > 100) {
+          var dot = Math.abs(gx * dx + gy * dy);
+          gradW = 1.0 - dot / (Math.sqrt(gradMag2) * dd + 0.001);
+          gradW = Math.max(0.05, gradW);
+        }
+
+        var weight = distW * (0.3 + 0.7 * gradW);
+        var ni4 = nidx * 4;
+        rS += result[ni4] * weight;
+        gS += result[ni4 + 1] * weight;
+        bS += result[ni4 + 2] * weight;
+        wS += weight;
+      }
+
+      if (wS > 1e-9) {
+        var i4 = idx * 4;
+        result[i4] = Math.round(rS / wS);
+        result[i4 + 1] = Math.round(gS / wS);
+        result[i4 + 2] = Math.round(bS / wS);
+        result[i4 + 3] = 255;
+        known[idx] = 1;
+        filled++;
+      }
+    }
+  }
+
+  return { imgData: new ImageData(result, w, h), filled: filled, radius: radius };
+}
+
+// ======= 测试用例 =======
+function imgDataToCanvas(imgData) {
+  var c = document.createElement('canvas');
+  c.width = imgData.width;
+  c.height = imgData.height;
+  c.getContext('2d').putImageData(imgData, 0, 0);
+  return c;
+}
+
+function canvasToImgData(cvs) {
+  return cvs.getContext('2d').getImageData(0, 0, cvs.width, cvs.height);
+}
+
+// Create mask: red rectangle at center
+function createMaskRect(w, h, mx, my, mw, mh) {
+  var c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  var ctx = c.getContext('2d');
+  ctx.fillStyle = '#ff0000';
+  ctx.fillRect(mx, my, mw, mh);
+  return ctx.getImageData(0, 0, w, h);
+}
+
+var testCases = [
+  {
+    name: '纯色背景 + 白色水印',
+    generate: function() {
+      var c = document.createElement('canvas');
+      c.width = 300; c.height = 200;
+      var ctx = c.getContext('2d');
+      // Solid blue background
+      ctx.fillStyle = '#4488cc';
+      ctx.fillRect(0, 0, 300, 200);
+      // White watermark text simulation
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+      ctx.font = 'bold 36px Arial';
+      ctx.fillText('LOGO', 70, 115);
+      return { src: c, mask: createMaskRect(300, 200, 65, 75, 160, 55) };
+    }
+  },
+  {
+    name: '径向渐变背景 + 彩色LOGO',
+    generate: function() {
+      var c = document.createElement('canvas');
+      c.width = 300; c.height = 200;
+      var ctx = c.getContext('2d');
+      // Radial gradient
+      var grad = ctx.createRadialGradient(150, 100, 20, 150, 100, 180);
+      grad.addColorStop(0, '#ffffff');
+      grad.addColorStop(0.5, '#88ccee');
+      grad.addColorStop(1, '#225588');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, 300, 200);
+      // Colorful watermark
+      ctx.fillStyle = 'rgba(255, 60, 60, 0.75)';
+      ctx.font = 'bold 40px Arial';
+      ctx.fillText('SALE', 60, 110);
+      ctx.fillStyle = 'rgba(255, 200, 0, 0.75)';
+      ctx.font = 'bold 28px Arial';
+      ctx.fillText('50% OFF', 55, 145);
+      return { src: c, mask: createMaskRect(300, 200, 50, 60, 200, 95) };
+    }
+  },
+  {
+    name: '产品照片 + 半透明水印',
+    generate: function() {
+      var c = document.createElement('canvas');
+      c.width = 400; c.height = 300;
+      var ctx = c.getContext('2d');
+      // Simulated photo background with texture
+      var imgData = ctx.createImageData(400, 300);
+      for (var y = 0; y < 300; y++) {
+        for (var x = 0; x < 400; x++) {
+          var i = (y * 400 + x) * 4;
+          // Simulate a gradient background with noise (like a product photo)
+          var baseR = 200 + 30 * Math.sin(x * 0.02) * Math.cos(y * 0.03);
+          var baseG = 180 + 20 * Math.cos(x * 0.025) * Math.sin(y * 0.02);
+          var baseB = 170 + 15 * Math.sin(x * 0.015) * Math.cos(y * 0.025);
+          var noise = (Math.random() - 0.5) * 15;
+          imgData.data[i] = Math.min(255, Math.max(0, baseR + noise));
+          imgData.data[i+1] = Math.min(255, Math.max(0, baseG + noise));
+          imgData.data[i+2] = Math.min(255, Math.max(0, baseB + noise));
+          imgData.data[i+3] = 255;
+        }
+      }
+      ctx.putImageData(imgData, 0, 0);
+
+      // Semi-transparent watermark overlay
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+      ctx.font = 'bold 48px Arial';
+      ctx.fillText('WATERMARK', 40, 160);
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+      ctx.font = 'bold 48px Arial';
+      ctx.fillText('WATERMARK', 42, 162);
+
+      return { src: c, mask: createMaskRect(400, 300, 35, 110, 340, 65) };
+    }
+  }
+];
+
+// ======= Render =======
+function renderTest(idx, result) {
+  var tc = testCases[idx];
+  var panel = document.getElementById('p' + idx);
+  if (!panel) return;
+
+  var rCanvas = document.getElementById('r' + idx);
+  var ctx = rCanvas.getContext('2d');
+  if (result) {
+    ctx.putImageData(result.imgData, 0, 0);
+    panel.querySelector('.time').textContent = '耗时: ' + result.time + 'ms';
+    panel.querySelector('.filled').textContent = '填充: ' + result.filled + 'px';
+    panel.querySelector('.radius').textContent = '半径: ' + result.radius;
+
+    // Verify: check that mask pixels actually changed
+    var gen = tc.generate();
+    var srcImgData = canvasToImgData(gen.src);
+    var maskData = gen.mask;
+    var changed = 0, total = 0;
+    for (var i = 0; i < result.imgData.data.length; i += 4) {
+      if (maskData.data[i + 3] > 0) {
+        total++;
+        if (result.imgData.data[i] !== srcImgData.data[i] ||
+            result.imgData.data[i+1] !== srcImgData.data[i+1] ||
+            result.imgData.data[i+2] !== srcImgData.data[i+2]) {
+          changed++;
+        }
+      }
+    }
+    var pct = total > 0 ? Math.round(changed / total * 100) : 0;
+    panel.querySelector('.verify').textContent = '实际替换: ' + changed + '/' + total + ' (' + pct + '%)';
+    panel.querySelector('.verify').className = 'verify ' + (pct >= 90 ? 'ok' : 'warn');
+  } else {
+    ctx.clearRect(0, 0, rCanvas.width, rCanvas.height);
+    panel.querySelector('.time').textContent = '';
+    panel.querySelector('.filled').textContent = '';
+    panel.querySelector('.radius').textContent = '';
+    panel.querySelector('.verify').textContent = '';
+    panel.querySelector('.verify').className = 'verify';
+  }
+}
+
+function initGrid() {
+  var grid = document.getElementById('grid');
+  grid.innerHTML = '';
+  testCases.forEach(function(tc, idx) {
+    var gen = tc.generate();
+    var panel = document.createElement('div');
+    panel.className = 'panel';
+    panel.id = 'p' + idx;
+    panel.innerHTML =
+      '<h3>' + tc.name + '</h3>' +
+      '<div class="badge warn">Mask: 红色矩形区域</div>' +
+      '<div style="display:flex;gap:8px">' +
+        '<div style="flex:1"><p style="font-size:.7rem;color:#888;margin:2px 0">原图</p>' +
+          '<canvas id="s' + idx + '" width="' + gen.src.width + '" height="' + gen.src.height + '" style="max-width:100%"></canvas></div>' +
+        '<div style="flex:1"><p style="font-size:.7rem;color:#888;margin:2px 0">修复结果</p>' +
+          '<canvas id="r' + idx + '" width="' + gen.src.width + '" height="' + gen.src.height + '" style="max-width:100%"></canvas></div>' +
+      '</div>' +
+      '<div style="font-size:.7rem;margin-top:6px;color:#888">' +
+        '<span class="time"></span> | <span class="filled"></span> | <span class="radius"></span> | <span class="verify"></span>' +
+      '</div>';
+    grid.appendChild(panel);
+    // Copy source
+    var sCanvas = document.getElementById('s' + idx);
+    sCanvas.getContext('2d').drawImage(gen.src, 0, 0);
+  });
+}
+
+function runSingleTest(idx) {
+  var tc = testCases[idx];
+  var gen = tc.generate();
+  var srcImgData = canvasToImgData(gen.src);
+  var maskData = gen.mask;
+
+  var t0 = performance.now();
+  var result = inpaintFMM(srcImgData, maskData, gen.src.width, gen.src.height);
+  var t1 = performance.now();
+
+  result.time = Math.round(t1 - t0);
+  renderTest(idx, result);
+}
+
+function runAllTests() {
+  document.getElementById('result').textContent = '运行中...';
+  testCases.forEach(function(tc, idx) {
+    var gen = tc.generate();
+    var srcImgData = canvasToImgData(gen.src);
+    var maskData = gen.mask;
+
+    var t0 = performance.now();
+    var result = inpaintFMM(srcImgData, maskData, gen.src.width, gen.src.height);
+    var t1 = performance.now();
+
+    result.time = Math.round(t1 - t0);
+    renderTest(idx, result);
+  });
+
+  // Compute overall stats
+  var allChanged = 0, allTotal = 0, totalTime = 0;
+  testCases.forEach(function(tc, idx) {
+    var gen = tc.generate();
+    var srcImgData = canvasToImgData(gen.src);
+    var maskData = gen.mask;
+    var rCanvas = document.getElementById('r' + idx);
+    var rCtx = rCanvas.getContext('2d');
+    var rImgData = rCtx.getImageData(0, 0, rCanvas.width, rCanvas.height);
+    for (var i = 0; i < rImgData.data.length; i += 4) {
+      if (maskData.data[i + 3] > 0) {
+        allTotal++;
+        if (rImgData.data[i] !== srcImgData.data[i] ||
+            rImgData.data[i+1] !== srcImgData.data[i+1] ||
+            rImgData.data[i+2] !== srcImgData.data[i+2]) {
+          allChanged++;
+        }
+      }
+    }
+    totalTime += parseInt(document.querySelector('#p' + idx + ' .time').textContent.replace('耗时: ','').replace('ms',''));
+  });
+  var pct = allTotal > 0 ? Math.round(allChanged / allTotal * 100) : 0;
+  document.getElementById('result').innerHTML =
+    '✅ 总体替换率: <b>' + pct + '%</b> (' + allChanged + '/' + allTotal + ' 像素) | 总耗时: <b>' + totalTime + 'ms</b>';
+}
+
+// Init on load
+initGrid();
+runAllTests();
+</script>
+</body>
+</html>
