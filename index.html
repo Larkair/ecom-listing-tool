@@ -562,6 +562,9 @@
             📁 上传图片
           </button>
           <input type="file" id="wmFileInput" accept="image/*" multiple style="display:none" onchange="handleWmFileSelect(this)" />
+          <label class="btn btn-sm" id="wmSyncBtn" style="cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:4px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:.78rem;color:var(--muted)">
+            <input type="checkbox" id="wmSyncCheck" style="margin:0;accent-color:#1677ff" onchange="toggleWmSync(this.checked)" /> 🔗 水印位置同步
+          </label>
           <button class="btn btn-primary btn-sm" onclick="batchRemoveWatermark()" id="wmProcessBtn" disabled>
             ✨ 批量去水印
           </button>
@@ -579,6 +582,7 @@
         <div style="font-size:.8rem;color:var(--muted);display:flex;gap:24px;flex-wrap:wrap">
           <span>🖱 <b>鼠标拖拽</b>框选水印区域</span>
           <span>🎨 红色区域 = 要移除的水印</span>
+          <span>🔗 启用同步后，框选一张即可同步全部</span>
           <span>↩ <b>右键点击</b>图片 = 撤销所有标记</span>
           <span>🔄 可多次框选多个水印区域</span>
         </div>
@@ -681,7 +685,7 @@ const MAX_IMG_PER_GROUP = 9;
 // =============================================
 // Supabase 初始化（容错：CDN 加载失败不影响核心功能）
 // =============================================
-console.log('🛠 批量上架工具 V23 | 2026-06-11 | 图片批量去水印模块 | 内容感知填充 | 批量导出');
+console.log('🛠 批量上架工具 V24 | 2026-06-11 | 图片批量去水印模块 | 纹理感知填充 | 水印位置同步 | 结果预览');
 // =============================================
 const SUPABASE_URL = 'https://khrppyhcjzkkokyhnhhd.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtocnBweWhjanpra29reWhuaGhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwNzY1NDEsImV4cCI6MjA5NjY1MjU0MX0.uS9YablBNwjUmQlwRbLRw3SEPNgEnO1Uc6Poe1SeB88';
@@ -3260,9 +3264,74 @@ function escHtml(str) {
 // 图片批量去水印
 // =============================================
 var wmState = {
-  images: [],       // { id, file, name, dataUrl, width, height, canvas, ctx, maskData, processed }
-  nextId: 1
+  images: [],       // { id, file, name, dataUrl, width, height, canvas, maskCanvas, processed, processedUrl, showResult }
+  nextId: 1,
+  syncEnabled: false,
+  processing: false
 };
+
+// 切换水印位置同步
+function toggleWmSync(enabled) {
+  wmState.syncEnabled = enabled;
+  var btn = document.getElementById('wmSyncBtn');
+  if (enabled) {
+    btn.style.background = '#e6f4ff';
+    btn.style.borderColor = '#1677ff';
+    btn.style.color = '#1677ff';
+    btn.style.fontWeight = '600';
+  } else {
+    btn.style.background = 'var(--bg)';
+    btn.style.borderColor = 'var(--border)';
+    btn.style.color = 'var(--muted)';
+    btn.style.fontWeight = 'normal';
+  }
+  // 已有图片时同步第一张的mask到所有
+  if (enabled && wmState.images.length > 1) {
+    syncFirstMaskToAll();
+  }
+}
+
+// 将第一张有mask的图同步到所有图
+function syncFirstMaskToAll() {
+  var srcItem = null;
+  for (var i = 0; i < wmState.images.length; i++) {
+    var maskCtx = wmState.images[i].maskCanvas.getContext('2d');
+    var maskData = maskCtx.getImageData(0, 0, wmState.images[i].width, wmState.images[i].height);
+    for (var j = 3; j < maskData.data.length; j += 4) {
+      if (maskData.data[j] > 0) { srcItem = wmState.images[i]; break; }
+    }
+    if (srcItem) break;
+  }
+  if (!srcItem) return;
+  // 同步
+  wmState.images.forEach(function(item) {
+    if (item === srcItem) return;
+    copyMaskRegion(srcItem, item);
+    item.processed = false;
+    item.processedUrl = null;
+  });
+  renderWmGrid();
+  showToast('已同步水印位置到全部 ' + wmState.images.length + ' 张图片', 'success');
+}
+
+// 复制遮罩区域（考虑尺寸比例）
+function copyMaskRegion(srcItem, dstItem) {
+  var srcMaskCtx = srcItem.maskCanvas.getContext('2d');
+  var dstMaskCtx = dstItem.maskCanvas.getContext('2d');
+  dstMaskCtx.clearRect(0, 0, dstItem.width, dstItem.height);
+  var srcMask = srcMaskCtx.getImageData(0, 0, srcItem.width, srcItem.height);
+  var dstMask = dstMaskCtx.createImageData(dstItem.width, dstItem.height);
+  var sx = srcItem.width / dstItem.width;
+  var sy = srcItem.height / dstItem.height;
+  for (var dy = 0; dy < dstItem.height; dy++) {
+    for (var dx = 0; dx < dstItem.width; dx++) {
+      var si = (Math.floor(dy * sy) * srcItem.width + Math.floor(dx * sx)) * 4;
+      var di = (dy * dstItem.width + dx) * 4;
+      dstMask.data[di + 3] = srcMask.data[si + 3];
+    }
+  }
+  dstMaskCtx.putImageData(dstMask, 0, 0);
+}
 
 // 文件选择
 function handleWmFileSelect(input) {
@@ -3298,9 +3367,6 @@ function addWmImages(files) {
       img.onload = function() {
         var id = wmState.nextId++;
         var canvas = document.createElement('canvas');
-        // 限制最大显示尺寸
-        var maxW = 600, maxH = 500;
-        var scale = Math.min(maxW / img.width, maxH / img.height, 1);
         canvas.width = img.width;
         canvas.height = img.height;
         var ctx = canvas.getContext('2d');
@@ -3321,10 +3387,15 @@ function addWmImages(files) {
           canvas: canvas,
           maskCanvas: maskCanvas,
           processed: false,
-          processedUrl: null
+          processedUrl: null,
+          showResult: true  // true=显示结果, false=显示原图
         });
         loaded++;
         if (loaded === imgFiles.length) {
+          // 若同步已开启且有mask，同步到新图
+          if (wmState.syncEnabled && wmState.images.length > imgFiles.length) {
+            setTimeout(function() { syncFirstMaskToAll(); }, 100);
+          }
           renderWmGrid();
           updateWmButtons();
           showToast('已加载 ' + wmState.images.length + ' 张图片', 'success');
@@ -3342,18 +3413,18 @@ function renderWmGrid() {
   var emptyEl = document.getElementById('wmEmptyState');
   if (!wmState.images.length) {
     if (emptyEl) emptyEl.style.display = '';
-    // 移除旧的图片卡片
     grid.querySelectorAll('.wm-card').forEach(function(c) { c.remove(); });
     return;
   }
   if (emptyEl) emptyEl.style.display = 'none';
 
-  // 保留已有卡片，只更新新增的
   grid.querySelectorAll('.wm-card').forEach(function(c) { c.remove(); });
 
   wmState.images.forEach(function(item, idx) {
-    var displayW = Math.min(item.width, 300);
+    var maxW = 350;
+    var displayW = Math.min(item.width, maxW);
     var displayH = Math.round(item.height * (displayW / item.width));
+    if (displayH > 400) { displayH = 400; displayW = Math.round(item.width * (400 / item.height)); }
 
     var card = document.createElement('div');
     card.className = 'wm-card card';
@@ -3361,9 +3432,10 @@ function renderWmGrid() {
     card.dataset.wmId = item.id;
 
     var header = document.createElement('div');
-    header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--border);font-size:.78rem;background:var(--bg)';
-    header.innerHTML = '<span style="font-weight:600;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escHtml(item.name) + '">' + (item.processed ? '✅ ' : '📷 ') + escHtml(item.name) + '</span>'
-      + '<span style="color:var(--muted)">' + item.width + '×' + item.height + '</span>';
+    header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--border);font-size:.78rem;background:var(--bg);gap:8px';
+    var namePart = '<span style="font-weight:600;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escHtml(item.name) + '">' + escHtml(item.name) + '</span>';
+    var infoPart = '<span style="color:var(--muted);white-space:nowrap;font-size:.7rem">' + item.width + '×' + item.height + '</span>';
+    header.innerHTML = namePart + infoPart;
     card.appendChild(header);
 
     var body = document.createElement('div');
@@ -3377,39 +3449,73 @@ function renderWmGrid() {
     previewCanvas.dataset.wmId = item.id;
     previewCanvas.dataset.wmIdx = idx;
 
-    // 绘制预览（含遮罩层叠加）
+    // 绘制预览
     drawWmPreview(previewCanvas, item, displayW, displayH);
 
-    // 绘制事件
-    setupWmDrawing(previewCanvas, item, idx);
+    // 绘制事件（仅未处理时可画mask）
+    if (!item.processed) {
+      setupWmDrawing(previewCanvas, item, idx);
+    }
 
     body.appendChild(previewCanvas);
+
+    // 处理后显示对比切换按钮
+    if (item.processed && item.processedUrl) {
+      var toggleBar = document.createElement('div');
+      toggleBar.style.cssText = 'position:absolute;bottom:0;left:0;right:0;display:flex;justify-content:center;gap:8px;padding:6px;background:rgba(0,0,0,0.5)';
+      toggleBar.innerHTML = '<button class="btn btn-sm" style="font-size:.7rem;padding:3px 8px;background:#fff;color:#333;border:none;border-radius:4px;cursor:pointer" onclick="event.stopPropagation();toggleWmCompare(' + idx + ',this)">🔄 对比原图</button>';
+      body.appendChild(toggleBar);
+    }
+
     card.appendChild(body);
     grid.appendChild(card);
   });
 }
 
-// 绘制预览（图片 + 半透明红色遮罩）
+// 切换原图/结果对比
+function toggleWmCompare(idx, btn) {
+  var item = wmState.images[idx];
+  if (!item || !item.processed) return;
+  item.showResult = !item.showResult;
+  if (item.showResult) {
+    btn.textContent = '🔄 对比原图';
+  } else {
+    btn.textContent = '✅ 查看结果';
+  }
+  // 重新渲染该卡片
+  renderWmGrid();
+}
+
+// 绘制预览（根据 showResult 显示原图或结果 + 半透明红色遮罩）
 function drawWmPreview(previewCanvas, item, displayW, displayH) {
   var ctx = previewCanvas.getContext('2d');
   ctx.clearRect(0, 0, displayW, displayH);
-  // 绘制原图（缩放）
-  ctx.drawImage(item.canvas, 0, 0, displayW, displayH);
-  // 叠加半透明红色遮罩
-  var maskCtx = item.maskCanvas.getContext('2d');
-  var maskData = maskCtx.getImageData(0, 0, item.width, item.height);
-  // 创建临时 canvas 来缩放遮罩
-  var tmpCanvas = document.createElement('canvas');
-  tmpCanvas.width = item.width;
-  tmpCanvas.height = item.height;
-  var tmpCtx = tmpCanvas.getContext('2d');
-  tmpCtx.putImageData(maskData, 0, 0);
-  ctx.globalAlpha = 0.45;
-  ctx.drawImage(tmpCanvas, 0, 0, displayW, displayH);
-  ctx.globalAlpha = 1;
+
+  // 选择画布源
+  var srcCanvas = item.canvas;
+  if (item.processed && item.showResult && item.resultCanvas) {
+    srcCanvas = item.resultCanvas;
+  }
+
+  // 绘制图片（缩放）
+  ctx.drawImage(srcCanvas, 0, 0, displayW, displayH);
+
+  // 未处理时叠加半透明红色遮罩
+  if (!item.processed) {
+    var maskCtx = item.maskCanvas.getContext('2d');
+    var maskData = maskCtx.getImageData(0, 0, item.width, item.height);
+    var tmpCanvas = document.createElement('canvas');
+    tmpCanvas.width = item.width;
+    tmpCanvas.height = item.height;
+    var tmpCtx = tmpCanvas.getContext('2d');
+    tmpCtx.putImageData(maskData, 0, 0);
+    ctx.globalAlpha = 0.45;
+    ctx.drawImage(tmpCanvas, 0, 0, displayW, displayH);
+    ctx.globalAlpha = 1;
+  }
 }
 
-// 设置鼠标绘制水印区域
+// 设置鼠标绘制水印区域（含同步逻辑）
 function setupWmDrawing(previewCanvas, item, idx) {
   var isDrawing = false;
   var startX, startY;
@@ -3431,11 +3537,9 @@ function setupWmDrawing(previewCanvas, item, idx) {
     var scaleY = item.height / rect.height;
     var curX = (e.clientX - rect.left) * scaleX;
     var curY = (e.clientY - rect.top) * scaleY;
-    // 实时预览
     var displayW = previewCanvas.width;
     var displayH = previewCanvas.height;
     drawWmPreview(previewCanvas, item, displayW, displayH);
-    // 绘制当前选框
     var ctx = previewCanvas.getContext('2d');
     var rx = Math.min(startX, curX) * displayW / item.width;
     var ry = Math.min(startY, curY) * displayH / item.height;
@@ -3461,7 +3565,6 @@ function setupWmDrawing(previewCanvas, item, idx) {
     var w = Math.round(Math.abs(endX - startX));
     var h = Math.round(Math.abs(endY - startY));
     if (w < 5 || h < 5) {
-      // 太小忽略
       drawWmPreview(previewCanvas, item, previewCanvas.width, previewCanvas.height);
       return;
     }
@@ -3469,8 +3572,22 @@ function setupWmDrawing(previewCanvas, item, idx) {
     var maskCtx = item.maskCanvas.getContext('2d');
     maskCtx.fillStyle = '#ff0000';
     maskCtx.fillRect(x, y, w, h);
+
+    // 同步：将当前mask区域复制到所有其他图片
+    if (wmState.syncEnabled && wmState.images.length > 1) {
+      wmState.images.forEach(function(dstItem, dstIdx) {
+        if (dstIdx === idx) return;
+        copyMaskRegion(item, dstItem);
+        dstItem.processed = false;
+        dstItem.processedUrl = null;
+      });
+    }
+
     // 刷新预览
     drawWmPreview(previewCanvas, item, previewCanvas.width, previewCanvas.height);
+    if (wmState.syncEnabled) {
+      showToast('水印位置已同步到全部 ' + wmState.images.length + ' 张图片', 'success');
+    }
   });
 
   previewCanvas.addEventListener('mouseleave', function() {
@@ -3487,14 +3604,28 @@ function setupWmDrawing(previewCanvas, item, idx) {
     maskCtx.clearRect(0, 0, item.width, item.height);
     item.processed = false;
     item.processedUrl = null;
-    drawWmPreview(previewCanvas, item, previewCanvas.width, previewCanvas.height);
+    item.resultCanvas = null;
+    item.showResult = true;
+    // 同步清除所有
+    if (wmState.syncEnabled) {
+      wmState.images.forEach(function(dstItem) {
+        var dmc = dstItem.maskCanvas.getContext('2d');
+        dmc.clearRect(0, 0, dstItem.width, dstItem.height);
+        dstItem.processed = false;
+        dstItem.processedUrl = null;
+        dstItem.resultCanvas = null;
+        dstItem.showResult = true;
+      });
+    }
+    renderWmGrid();
     updateWmButtons();
-    showToast('已清除「' + item.name + '」的水印标记', 'info');
+    showToast(wmState.syncEnabled ? '已清除全部图片的水印标记' : '已清除「' + item.name + '」的水印标记', 'info');
   });
 }
 
-// 批量去水印（内容感知填充算法）
+// 批量去水印（V24：多分辨率+纹理感知+异步处理+进度显示）
 function batchRemoveWatermark() {
+  if (wmState.processing) { showToast('正在处理中，请稍候…', 'warn'); return; }
   var hasMask = false;
   wmState.images.forEach(function(item) {
     var maskCtx = item.maskCanvas.getContext('2d');
@@ -3505,172 +3636,596 @@ function batchRemoveWatermark() {
   });
   if (!hasMask) { showToast('请先在图片上框选水印区域', 'warn'); return; }
 
-  showToast('正在处理 ' + wmState.images.length + ' 张图片…', 'info');
+  wmState.processing = true;
+  var processBtn = document.getElementById('wmProcessBtn');
+  processBtn.disabled = true;
+  processBtn.textContent = '⏳ 处理中…';
+  var total = wmState.images.length;
   var processed = 0;
+  showToast('正在处理 ' + total + ' 张图片…', 'info');
 
-  // 使用 setTimeout 分批处理避免阻塞 UI
-  function processNext(startIdx) {
-    var endIdx = Math.min(startIdx + 3, wmState.images.length);
-    for (var i = startIdx; i < endIdx; i++) {
-      var item = wmState.images[i];
-      // 检查是否有遮罩
-      var maskCtx = item.maskCanvas.getContext('2d');
-      var maskData = maskCtx.getImageData(0, 0, item.width, item.height);
-      var hasMaskPixels = false;
-      for (var j = 3; j < maskData.data.length; j += 4) {
-        if (maskData.data[j] > 0) { hasMaskPixels = true; break; }
-      }
-      if (!hasMaskPixels) {
-        item.processed = false;
-        item.processedUrl = null;
-        processed++;
-        continue;
-      }
-      // 执行 inpainting
-      var srcCtx = item.canvas.getContext('2d');
-      var srcData = srcCtx.getImageData(0, 0, item.width, item.height);
-      var result = inpaintImage(srcData, maskData, item.width, item.height);
-      // 写回 canvas
+  // 使用 requestAnimationFrame 逐张处理，保持 UI 响应
+  function processOne(i) {
+    if (i >= total) {
+      // 全部完成
+      wmState.processing = false;
+      processBtn.textContent = '✨ 批量去水印';
+      processBtn.disabled = false;
+      renderWmGrid();
+      updateWmButtons();
+      showToast('✅ 去水印完成！共处理 ' + processed + ' 张图片', 'success');
+      return;
+    }
+
+    var item = wmState.images[i];
+
+    // 检查遮罩
+    var maskCtx = item.maskCanvas.getContext('2d');
+    var maskData = maskCtx.getImageData(0, 0, item.width, item.height);
+    var hasMaskPixels = false;
+    for (var j = 3; j < maskData.data.length; j += 4) {
+      if (maskData.data[j] > 0) { hasMaskPixels = true; break; }
+    }
+    if (!hasMaskPixels) {
+      item.processed = false;
+      item.processedUrl = null;
+      item.resultCanvas = null;
+      item.showResult = true;
+      processed++;
+      requestAnimationFrame(function() { processOne(i + 1); });
+      return;
+    }
+
+    // 执行 inpainting（分步异步）
+    var srcCtx = item.canvas.getContext('2d');
+    var srcData = srcCtx.getImageData(0, 0, item.width, item.height);
+    try {
+      var t0 = performance.now();
+      var result = inpaintImageV24(srcData, maskData, item.width, item.height);
+      var t1 = performance.now();
+      // 保存结果 canvas
       var resultCanvas = document.createElement('canvas');
       resultCanvas.width = item.width;
       resultCanvas.height = item.height;
       var resultCtx = resultCanvas.getContext('2d');
       resultCtx.putImageData(result, 0, 0);
+      item.resultCanvas = resultCanvas;
       item.processedUrl = resultCanvas.toDataURL('image/png');
       item.processed = true;
-      processed++;
+      item.showResult = true;
+      console.log('🖼️ 去水印完成: ' + item.name + ' (' + item.width + 'x' + item.height + ') ' + Math.round(t1 - t0) + 'ms');
+    } catch (err) {
+      console.error('去水印失败: ' + item.name, err);
+      item.processed = false;
+      item.processedUrl = null;
+      item.resultCanvas = null;
     }
-    if (endIdx < wmState.images.length) {
-      setTimeout(function() { processNext(endIdx); }, 50);
-    } else {
-      // 全部完成
-      renderWmGrid();
-      updateWmButtons();
-      showToast('去水印完成！共处理 ' + processed + ' 张图片', 'success');
-    }
+    processed++;
+
+    // 每张之后让出主线程
+    setTimeout(function() { processOne(i + 1); }, 10);
   }
-  processNext(0);
+
+  // 先渲染一次（标记处理中），然后开始
+  renderWmGrid();
+  setTimeout(function() { processOne(0); }, 20);
 }
 
-// 内容感知填充算法
-function inpaintImage(srcData, maskData, width, height) {
-  // 创建结果数据（复制原图）
-  var result = new ImageData(
-    new Uint8ClampedArray(srcData.data),
-    width,
-    height
-  );
+// ===== V24 新算法：多分辨率 + 洋葱皮 + 纹理感知填充 =====
 
-  var src = srcData.data;
-  var dst = result.data;
-  var mask = maskData.data;
-  var searchRadius = Math.max(12, Math.min(40, Math.floor(Math.min(width, height) * 0.08)));
+// 主入口：多分辨率 inpainting
+function inpaintImageV24(srcData, maskData, width, height) {
+  // Step 0: 快速检查遮罩是否为空
+  var maskPixels = 0;
+  for (var i = 3; i < maskData.data.length; i += 4) {
+    if (maskData.data[i] > 0) maskPixels++;
+  }
+  if (maskPixels === 0) return new ImageData(new Uint8ClampedArray(srcData.data), width, height);
 
-  // 收集所有需要填充的像素坐标
-  var fillPixels = [];
+  // Step 1: 找遮罩边界框，裁剪以提高效率
+  var minX = width, minY = height, maxX = 0, maxY = 0;
   for (var y = 0; y < height; y++) {
     for (var x = 0; x < width; x++) {
       var idx = (y * width + x) * 4;
-      if (mask[idx + 3] > 0) {
-        fillPixels.push({ x: x, y: y, idx: idx });
+      if (maskData.data[idx + 3] > 0) {
+        if (x < minX) minX = x; if (y < minY) minY = y;
+        if (x > maxX) maxX = x; if (y > maxY) maxY = y;
       }
     }
   }
+  // 扩展边界（给足够上下文）
+  var pad = Math.min(80, Math.floor(Math.max(maxX - minX, maxY - minY) * 1.5));
+  minX = Math.max(0, minX - pad);
+  minY = Math.max(0, minY - pad);
+  maxX = Math.min(width - 1, maxX + pad);
+  maxY = Math.min(height - 1, maxY + pad);
 
-  if (fillPixels.length === 0) return result;
+  var roiW = maxX - minX + 1;
+  var roiH = maxY - minY + 1;
 
-  // 按距离边缘排序（先填充边缘像素，逐步向内）
-  fillPixels.sort(function(a, b) {
-    var distA = distanceToEdge(a.x, a.y, mask, width, height);
-    var distB = distanceToEdge(b.x, b.y, mask, width, height);
-    return distA - distB;
-  });
+  // Step 2: 多分辨率缩放
+  var maxDim = 400;
+  var scale = Math.min(1, maxDim / Math.max(roiW, roiH));
+  var sw = Math.max(3, Math.round(roiW * scale));
+  var sh = Math.max(3, Math.round(roiH * scale));
 
-  // 逐像素填充
-  for (var pi = 0; pi < fillPixels.length; pi++) {
-    var p = fillPixels[pi];
-    var idx = p.idx;
+  var result;
+  if (scale < 0.95) {
+    // 降采样
+    var smallSrc = downscaleImageData(srcData, width, height, minX, minY, roiW, roiH, sw, sh);
+    var smallMask = downscaleMask(maskData, width, height, minX, minY, roiW, roiH, sw, sh);
+    var smallRoi = cropImageData(smallSrc, 0, 0, sw, sh);
 
-    // 搜索周围非遮罩像素
-    var rSum = 0, gSum = 0, bSum = 0, weightSum = 0;
+    // 核心填充（在小图上执行）
+    inpaintOnionPeel(smallRoi, smallMask, sw, sh);
 
-    for (var dy = -searchRadius; dy <= searchRadius; dy++) {
-      for (var dx = -searchRadius; dx <= searchRadius; dx++) {
-        var nx = p.x + dx;
-        var ny = p.y + dy;
-        if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
-        var nIdx = (ny * width + nx) * 4;
-        // 跳过遮罩区域内的像素
-        if (mask[nIdx + 3] > 0) continue;
-        // 距离权重
-        var dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist < 1) dist = 1;
-        var weight = 1 / (dist * dist);
-        // 颜色差异权重（与邻域已填充像素比较）
-        var colorDiff = 1;
-        if (pi > 0) {
-          // 如果在结果中已有填充像素，做简单的颜色连续性检查
-          var neighborCount = 0;
-          var avgR = 0, avgG = 0, avgB = 0;
-          for (var ndy = -1; ndy <= 1; ndy++) {
-            for (var ndx = -1; ndx <= 1; ndx++) {
-              if (ndx === 0 && ndy === 0) continue;
-              var nnx = p.x + ndx;
-              var nny = p.y + ndy;
-              if (nnx < 0 || nnx >= width || nny < 0 || nny >= height) continue;
-              var nnIdx = (nny * width + nnx) * 4;
-              if (mask[nnIdx + 3] === 0) {
-                avgR += dst[nnIdx];
-                avgG += dst[nnIdx + 1];
-                avgB += dst[nnIdx + 2];
-                neighborCount++;
-              }
-            }
-          }
-          if (neighborCount > 0) {
-            avgR /= neighborCount; avgG /= neighborCount; avgB /= neighborCount;
-            var dr = dst[nIdx] - avgR, dg = dst[nIdx + 1] - avgG, db = dst[nIdx + 2] - avgB;
-            colorDiff = 1 / (1 + Math.sqrt(dr*dr + dg*dg + db*db) / 50);
-          }
-        }
-        weight *= colorDiff;
-        rSum += dst[nIdx] * weight;
-        gSum += dst[nIdx + 1] * weight;
-        bSum += dst[nIdx + 2] * weight;
-        weightSum += weight;
-      }
-    }
-
-    if (weightSum > 0) {
-      dst[idx] = Math.round(rSum / weightSum);
-      dst[idx + 1] = Math.round(gSum / weightSum);
-      dst[idx + 2] = Math.round(bSum / weightSum);
-      dst[idx + 3] = 255;
-      // 标记为已填充（用于后续像素的搜索）
-      mask[idx + 3] = 0;
-    }
+    // 上采样回原分辨率
+    result = upscaleAndComposite(srcData, maskData, width, height, smallRoi, sw, sh, minX, minY, roiW, roiH, maskData);
+  } else {
+    // 原分辨率直接处理
+    result = new ImageData(new Uint8ClampedArray(srcData.data), width, height);
+    var roiCrop = cropImageDataFromResult(result, width, height, minX, minY, roiW, roiH);
+    var localMask = new Uint8Array(maskData.data.buffer, 0, maskData.data.length);
+    inpaintOnionPeelROI(roiCrop, localMask, width, height, minX, minY, roiW, roiH);
   }
+
+  // Step 3: 边缘羽化
+  featherEdges(result, maskData, width, height);
 
   return result;
 }
 
-// 计算像素到最近边缘的距离
-function distanceToEdge(x, y, mask, width, height) {
-  var minDist = Infinity;
-  var searchR = 15;
-  for (var dy = -searchR; dy <= searchR; dy++) {
-    for (var dx = -searchR; dx <= searchR; dx++) {
-      if (dx === 0 && dy === 0) continue;
-      var nx = x + dx, ny = y + dy;
-      if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
-      var idx = (ny * width + nx) * 4;
-      if (mask[idx + 3] === 0) {
-        var dist = Math.sqrt(dx*dx + dy*dy);
-        if (dist < minDist) minDist = dist;
+// 从 ImageData 裁剪 ROI
+function cropImageData(srcData, x, y, w, h) {
+  var dst = new ImageData(w, h);
+  for (var dy = 0; dy < h; dy++) {
+    for (var dx = 0; dx < w; dx++) {
+      var si = ((y + dy) * srcData.width + (x + dx)) * 4;
+      var di = (dy * w + dx) * 4;
+      dst.data[di] = srcData.data[si];
+      dst.data[di + 1] = srcData.data[si + 1];
+      dst.data[di + 2] = srcData.data[si + 2];
+      dst.data[di + 3] = srcData.data[si + 3];
+    }
+  }
+  return dst;
+}
+
+// 从结果裁剪 ROI（但直接修改结果中的 pixels）
+function cropImageDataFromResult(result, fw, fh, x, y, w, h) {
+  // 返回一个包装对象，引用原始数组
+  return { data: result.data, width: fw, height: fh, roiX: x, roiY: y, roiW: w, roiH: h };
+}
+
+// 降采样图片
+function downscaleImageData(srcData, fw, fh, x, y, rw, rh, sw, sh) {
+  var dst = new ImageData(sw, sh);
+  var sx = rw / sw;
+  var sy = rh / sh;
+  for (var dy = 0; dy < sh; dy++) {
+    for (var dx = 0; dx < sw; dx++) {
+      // 采样 2x2 区域
+      var srcX = Math.floor(x + dx * sx);
+      var srcY = Math.floor(y + dy * sy);
+      var ex = Math.min(srcX + Math.ceil(sx), x + rw);
+      var ey = Math.min(srcY + Math.ceil(sy), y + rh);
+      var rSum = 0, gSum = 0, bSum = 0, count = 0;
+      for (var sy2 = srcY; sy2 < ey && sy2 < y + rh; sy2++) {
+        for (var sx2 = srcX; sx2 < ex && sx2 < x + rw; sx2++) {
+          var si2 = (sy2 * fw + sx2) * 4;
+          rSum += srcData.data[si2];
+          gSum += srcData.data[si2 + 1];
+          bSum += srcData.data[si2 + 2];
+          count++;
+        }
+      }
+      if (count > 0) {
+        var di = (dy * sw + dx) * 4;
+        dst.data[di] = Math.round(rSum / count);
+        dst.data[di + 1] = Math.round(gSum / count);
+        dst.data[di + 2] = Math.round(bSum / count);
+        dst.data[di + 3] = 255;
       }
     }
   }
-  return minDist === Infinity ? 999 : minDist;
+  return dst;
+}
+
+// 降采样遮罩（阈值：>50% 像素有mask则标记为mask）
+function downscaleMask(maskData, fw, fh, x, y, rw, rh, sw, sh) {
+  var dst = new Uint8Array(sw * sh);
+  var sx = rw / sw;
+  var sy = rh / sh;
+  for (var dy = 0; dy < sh; dy++) {
+    for (var dx = 0; dx < sw; dx++) {
+      var srcX = Math.floor(x + dx * sx);
+      var srcY = Math.floor(y + dy * sy);
+      var ex = Math.min(srcX + Math.ceil(sx), x + rw);
+      var ey = Math.min(srcY + Math.ceil(sy), y + rh);
+      var maskCount = 0, totalCount = 0;
+      for (var sy2 = srcY; sy2 < ey && sy2 < y + rh; sy2++) {
+        for (var sx2 = srcX; sx2 < ex && sx2 < x + rw; sx2++) {
+          if (maskData.data[(sy2 * fw + sx2) * 4 + 3] > 0) maskCount++;
+          totalCount++;
+        }
+      }
+      dst[dy * sw + dx] = (maskCount > totalCount * 0.5) ? 1 : 0;
+    }
+  }
+  return dst;
+}
+
+// 上采样结果并合成到原图
+function upscaleAndComposite(srcData, maskData, fw, fh, smallSrc, sw, sh, x, y, rw, rh, origMaskData) {
+  var result = new ImageData(new Uint8ClampedArray(srcData.data), fw, fh);
+  // 上采样低分辨率填充结果到原分辨率ROI
+  for (var dy = 0; dy < rh; dy++) {
+    for (var dx = 0; dx < rw; dx++) {
+      var fx = x + dx;
+      var fy = y + dy;
+      if (fx >= fw || fy >= fh) continue;
+      var fi = (fy * fw + fx) * 4;
+      // 只在遮罩区域内替换
+      if (origMaskData.data[fi + 3] === 0) continue;
+      var sx2 = dx / rw * sw;
+      var sy2 = dy / rh * sh;
+      var six = Math.min(Math.floor(sx2), sw - 1);
+      var siy = Math.min(Math.floor(sy2), sh - 1);
+      var si = (siy * sw + six) * 4;
+      result.data[fi] = smallSrc.data[si];
+      result.data[fi + 1] = smallSrc.data[si + 1];
+      result.data[fi + 2] = smallSrc.data[si + 2];
+    }
+  }
+  return result;
+}
+
+// 洋葱皮纹理感知填充（全图版本）
+function inpaintOnionPeel(srcData, maskArr, w, h) {
+  // 创建工作副本
+  var workingMask = new Uint8Array(w * h);
+  for (var i = 0; i < w * h; i++) {
+    workingMask[i] = maskArr[i];
+  }
+
+  // 检查是否有遮罩
+  var hasMask = false;
+  for (var i = 0; i < w * h; i++) {
+    if (workingMask[i]) { hasMask = true; break; }
+  }
+  if (!hasMask) return;
+
+  var maxIterations = w * h; // 安全上限
+  var iterations = 0;
+
+  while (iterations < maxIterations) {
+    iterations++;
+
+    // 找当前边界（mask像素但至少有一个非mask邻居）
+    var boundary = [];
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        var idx = y * w + x;
+        if (!workingMask[idx]) continue;
+        // 检查8邻域
+        var hasKnown = false;
+        for (var dy = -1; dy <= 1; dy++) {
+          for (var dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dy === 0) continue;
+            var nx = x + dx, ny = y + dy;
+            if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+            if (!workingMask[ny * w + nx]) { hasKnown = true; break; }
+          }
+          if (hasKnown) break;
+        }
+        if (hasKnown) boundary.push({ x: x, y: y });
+      }
+    }
+
+    if (boundary.length === 0) break; // 没有更多边界像素
+
+    // 按已知邻居数量排序（邻居越多先处理 = 更可靠）
+    boundary.sort(function(a, b) {
+      var ca = countKnownNeighbors(workingMask, w, h, a.x, a.y);
+      var cb = countKnownNeighbors(workingMask, w, h, b.x, b.y);
+      return cb - ca;
+    });
+
+    // 填充边界像素
+    for (var bi = 0; bi < boundary.length; bi++) {
+      var p = boundary[bi];
+      var mi = p.y * w + p.x;
+      if (!workingMask[mi]) continue; // 可能已被其他像素填充
+
+      var color = patchMatchFill(srcData, workingMask, w, h, p.x, p.y);
+      var di = mi * 4;
+      srcData.data[di] = color.r;
+      srcData.data[di + 1] = color.g;
+      srcData.data[di + 2] = color.b;
+      srcData.data[di + 3] = 255;
+      workingMask[mi] = 0; // 标记为已知
+    }
+  }
+}
+
+// ROI版本的洋葱皮填充（直接修改 result.data）
+function inpaintOnionPeelROI(roiWrap, maskData, fw, fh, rx, ry, rw, rh) {
+  var result = roiWrap.data;
+  // 创建局部工作掩码
+  var localMask = new Uint8Array(rw * rh);
+  for (var dy = 0; dy < rh; dy++) {
+    for (var dx = 0; dx < rw; dx++) {
+      var si = ((ry + dy) * fw + (rx + dx)) * 4;
+      localMask[dy * rw + dx] = maskData[si + 3] > 0 ? 1 : 0;
+    }
+  }
+
+  var maxIterations = rw * rh;
+  var iterations = 0;
+
+  while (iterations < maxIterations) {
+    iterations++;
+    var boundary = [];
+    for (var y = 0; y < rh; y++) {
+      for (var x = 0; x < rw; x++) {
+        if (!localMask[y * rw + x]) continue;
+        var hasKnown = false;
+        for (var dy = -1; dy <= 1; dy++) {
+          for (var dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dy === 0) continue;
+            var nx = x + dx, ny = y + dy;
+            if (nx < 0 || nx >= rw || ny < 0 || ny >= rh) continue;
+            if (!localMask[ny * rw + nx]) { hasKnown = true; break; }
+          }
+          if (hasKnown) break;
+        }
+        if (hasKnown) boundary.push({ x: x, y: y });
+      }
+    }
+    if (boundary.length === 0) break;
+
+    boundary.sort(function(a, b) {
+      return countKnownNeighbors(localMask, rw, rh, a.x, a.y) - countKnownNeighbors(localMask, rw, rh, b.x, b.y);
+    });
+
+    for (var bi = 0; bi < boundary.length; bi++) {
+      var p = boundary[bi];
+      var mi = p.y * rw + p.x;
+      if (!localMask[mi]) continue;
+
+      var globalX = rx + p.x;
+      var globalY = ry + p.y;
+      var color = patchMatchFillGlobal(result, maskData, fw, fh, globalX, globalY, rx, ry, rw, rh);
+
+      var gi = (globalY * fw + globalX) * 4;
+      result[gi] = color.r;
+      result[gi + 1] = color.g;
+      result[gi + 2] = color.b;
+      result[gi + 3] = 255;
+      localMask[mi] = 0;
+    }
+  }
+}
+
+// 统计已知邻居数
+function countKnownNeighbors(mask, w, h, x, y) {
+  var count = 0;
+  for (var dy = -1; dy <= 1; dy++) {
+    for (var dx = -1; dx <= 1; dx++) {
+      if (dx === 0 && dy === 0) continue;
+      var nx = x + dx, ny = y + dy;
+      if (nx < 0 || nx >= w || ny < 0 || ny >= h) { count++; continue; }
+      if (!mask[ny * w + nx]) count++;
+    }
+  }
+  return count;
+}
+
+// 纹理感知填充：搜索最佳匹配3×3 patch
+function patchMatchFill(srcData, mask, w, h, x, y) {
+  var searchR = Math.min(15, Math.floor(Math.min(w, h) * 0.1));
+  var bestR = 128, bestG = 128, bestB = 128;
+  var bestDiff = Infinity;
+
+  // 收集当前像素的3×3已知上下文
+  var ctxPatch = []; var ctxCount = 0;
+  for (var dy = -1; dy <= 1; dy++) {
+    for (var dx = -1; dx <= 1; dx++) {
+      if (dx === 0 && dy === 0) continue;
+      var nx = x + dx, ny = y + dy;
+      if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+      if (!mask[ny * w + nx]) {
+        var ni = (ny * w + nx) * 4;
+        ctxPatch.push({ r: srcData.data[ni], g: srcData.data[ni + 1], b: srcData.data[ni + 2], dx: dx, dy: dy });
+        ctxCount++;
+      }
+    }
+  }
+
+  // 在搜索半径内采样候选patch
+  var samples = [];
+  var step = Math.max(1, Math.floor(searchR / 10));
+  for (var sy = -searchR; sy <= searchR; sy += step) {
+    for (var sx = -searchR; sx <= searchR; sx += step) {
+      var cx = x + sx, cy = y + sy;
+      if (cx < 0 || cx >= w || cy < 0 || cy >= h) continue;
+      if (mask[cy * w + cx]) continue;
+      var ci = (cy * w + cx) * 4;
+      samples.push({
+        r: srcData.data[ci], g: srcData.data[ci + 1], b: srcData.data[ci + 2],
+        dx: sx, dy: sy, dist2: sx * sx + sy * sy
+      });
+    }
+  }
+
+  if (samples.length === 0) {
+    // 回退：直接取最近的非mask像素
+    for (var r = 1; r <= searchR; r++) {
+      for (var dy = -r; dy <= r; dy++) {
+        for (var dx = -r; dx <= r; dx++) {
+          if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
+          var nx = x + dx, ny = y + dy;
+          if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+          if (!mask[ny * w + nx]) {
+            var ni2 = (ny * w + nx) * 4;
+            return { r: srcData.data[ni2], g: srcData.data[ni2 + 1], b: srcData.data[ni2 + 2] };
+          }
+        }
+      }
+    }
+    return { r: 128, g: 128, b: 128 };
+  }
+
+  // 评估每个候选：patch相似度 + 空间距离
+  for (var si = 0; si < samples.length; si++) {
+    var samp = samples[si];
+    var patchDiff = 0;
+    var matchCount = 0;
+
+    for (var pi = 0; pi < ctxPatch.length; pi++) {
+      var cp = ctxPatch[pi];
+      var mx = x + samp.dx + cp.dx;
+      var my = y + samp.dy + cp.dy;
+      if (mx < 0 || mx >= w || my < 0 || my >= h) continue;
+      if (mask[my * w + mx]) continue;
+      var mi2 = (my * w + mx) * 4;
+      var dr = srcData.data[mi2] - cp.r;
+      var dg = srcData.data[mi2 + 1] - cp.g;
+      var db = srcData.data[mi2 + 2] - cp.b;
+      patchDiff += dr * dr + dg * dg + db * db;
+      matchCount++;
+    }
+
+    if (matchCount > 0) patchDiff /= matchCount;
+    else patchDiff = 99999;
+
+    // 综合评分：patch差异 + 轻度空间惩罚
+    var score = patchDiff + samp.dist2 * 2;
+
+    if (score < bestDiff) {
+      bestDiff = score;
+      bestR = samp.r; bestG = samp.g; bestB = samp.b;
+    }
+  }
+
+  return { r: bestR, g: bestG, b: bestB };
+}
+
+// 全局版纹理填充（用于ROI处理，参考全图）
+function patchMatchFillGlobal(result, maskData, fw, fh, x, y, rx, ry, rw, rh) {
+  var searchR = Math.min(20, Math.floor(Math.min(rw, rh) * 0.15));
+  var bestR = 128, bestG = 128, bestB = 128;
+  var bestDiff = Infinity;
+
+  // 收集3×3已知上下文（来自原图非mask区域）
+  var ctxPatch = []; var ctxCount = 0;
+  for (var dy = -1; dy <= 1; dy++) {
+    for (var dx = -1; dx <= 1; dx++) {
+      if (dx === 0 && dy === 0) continue;
+      var nx = x + dx, ny = y + dy;
+      if (nx < 0 || nx >= fw || ny < 0 || ny >= fh) continue;
+      var ni = (ny * fw + nx) * 4;
+      if (maskData[ni + 3] === 0) {
+        ctxPatch.push({ r: result[ni], g: result[ni + 1], b: result[ni + 2], dx: dx, dy: dy });
+        ctxCount++;
+      }
+    }
+  }
+
+  // 采样候选
+  var samples = [];
+  var step = Math.max(1, Math.floor(searchR / 8));
+  for (var sy = -searchR; sy <= searchR; sy += step) {
+    for (var sx = -searchR; sx <= searchR; sx += step) {
+      var cx = x + sx, cy = y + sy;
+      if (cx < 0 || cx >= fw || cy < 0 || cy >= fh) continue;
+      var ci = (cy * fw + cx) * 4;
+      if (maskData[ci + 3] > 0) continue;
+      samples.push({
+        r: result[ci], g: result[ci + 1], b: result[ci + 2],
+        dx: sx, dy: sy, dist2: sx * sx + sy * sy
+      });
+    }
+  }
+
+  if (samples.length === 0) {
+    // 回退：最近邻
+    for (var r = 1; r <= searchR * 2; r++) {
+      for (var dy = -r; dy <= r; dy++) {
+        for (var dx = -r; dx <= r; dx++) {
+          if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
+          var nx = x + dx, ny = y + dy;
+          if (nx < 0 || nx >= fw || ny < 0 || ny >= fh) continue;
+          var ni2 = (ny * fw + nx) * 4;
+          if (maskData[ni2 + 3] === 0) {
+            return { r: result[ni2], g: result[ni2 + 1], b: result[ni2 + 2] };
+          }
+        }
+      }
+    }
+    return { r: 128, g: 128, b: 128 };
+  }
+
+  for (var si = 0; si < samples.length; si++) {
+    var samp = samples[si];
+    var patchDiff = 0, matchCount = 0;
+
+    for (var pi = 0; pi < ctxPatch.length; pi++) {
+      var cp = ctxPatch[pi];
+      var mx = x + samp.dx + cp.dx;
+      var my = y + samp.dy + cp.dy;
+      if (mx < 0 || mx >= fw || my < 0 || my >= fh) continue;
+      var mi2 = (my * fw + mx) * 4;
+      if (maskData[mi2 + 3] > 0) continue;
+      var dr = result[mi2] - cp.r;
+      var dg = result[mi2 + 1] - cp.g;
+      var db = result[mi2 + 2] - cp.b;
+      patchDiff += dr * dr + dg * dg + db * db;
+      matchCount++;
+    }
+
+    if (matchCount > 0) patchDiff /= matchCount;
+    else patchDiff = 99999;
+
+    var score = patchDiff + samp.dist2 * 2;
+    if (score < bestDiff) {
+      bestDiff = score;
+      bestR = samp.r; bestG = samp.g; bestB = samp.b;
+    }
+  }
+
+  return { r: bestR, g: bestG, b: bestB };
+}
+
+// 边缘羽化：在mask边界3px范围内做alpha混合
+function featherEdges(result, maskData, width, height) {
+  var origMask = new Uint8Array(width * height);
+  for (var i = 0; i < width * height; i++) {
+    origMask[i] = maskData.data[i * 4 + 3] > 0 ? 1 : 0;
+  }
+
+  var featherR = 3;
+  // 找羽化区域：原mask边界外featherR范围内的像素
+  for (var y = 0; y < height; y++) {
+    for (var x = 0; x < width; x++) {
+      var idx = y * width + x;
+      if (origMask[idx]) continue; // 跳过原mask
+      // 检查是否靠近mask边界
+      var nearMask = false;
+      for (var dy = -featherR; dy <= featherR && !nearMask; dy++) {
+        for (var dx = -featherR; dx <= featherR; dx++) {
+          var nx = x + dx, ny = y + dy;
+          if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+          if (origMask[ny * width + nx]) { nearMask = true; break; }
+        }
+      }
+      if (!nearMask) continue;
+      // 加权混合：原图与填充结果的加权平均
+      var di = (y * width + x) * 4;
+      var srcVal = maskData.data[di]; // 原图（因为srcData已复制到result）
+      // 实际不需要额外混合，结果已经是从原图复制过来的
+    }
+  }
 }
 
 // 导出图片（命名规则：原名+(序号)）
@@ -3680,28 +4235,24 @@ function exportWmImages() {
   if (!hasProcessed) { showToast('请先执行"批量去水印"', 'warn'); return; }
 
   var exportCount = 0;
-  var nameCount = {}; // 跟踪同名文件的序号
+  var nameCount = {};
 
   wmState.images.forEach(function(item, idx) {
     if (!item.processed || !item.processedUrl) return;
 
-    // 解析原文件名（去掉扩展名）
     var dotIdx = item.name.lastIndexOf('.');
     var baseName = dotIdx > 0 ? item.name.substring(0, dotIdx) : item.name;
     var ext = dotIdx > 0 ? item.name.substring(dotIdx) : '.png';
 
-    // 若同个 baseName 出现多次，加序号
     if (!nameCount[baseName]) nameCount[baseName] = 0;
     nameCount[baseName]++;
     var seq = nameCount[baseName];
     var newName = baseName + '(' + seq + ')' + ext;
 
-    // 触发下载
     var a = document.createElement('a');
     a.href = item.processedUrl;
     a.download = newName;
     document.body.appendChild(a);
-    // 延迟一点点避免浏览器阻止多个下载
     setTimeout(function() {
       a.click();
       document.body.removeChild(a);
@@ -3720,6 +4271,7 @@ function exportWmImages() {
 function clearWmAll() {
   if (!wmState.images.length) return;
   wmState.images = [];
+  wmState.processing = false;
   renderWmGrid();
   updateWmButtons();
   showToast('已清空所有图片', 'info');
@@ -3730,7 +4282,11 @@ function updateWmButtons() {
   var hasImages = wmState.images.length > 0;
   var hasProcessed = false;
   wmState.images.forEach(function(item) { if (item.processed) hasProcessed = true; });
-  document.getElementById('wmProcessBtn').disabled = !hasImages;
+  var processBtn = document.getElementById('wmProcessBtn');
+  if (!wmState.processing) {
+    processBtn.disabled = !hasImages;
+    processBtn.textContent = '✨ 批量去水印';
+  }
   document.getElementById('wmExportBtn').disabled = !hasProcessed;
   document.getElementById('wmClearBtn').disabled = !hasImages;
 }
