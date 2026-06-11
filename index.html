@@ -627,7 +627,7 @@ const MAX_IMG_PER_GROUP = 9;
 // =============================================
 // Supabase 初始化（容错：CDN 加载失败不影响核心功能）
 // =============================================
-console.log('🛠 批量上架工具 V18 | 2026-06-11 | 新增按链接排序 | 模板基底导出');
+console.log('🛠 批量上架工具 V19 | 2026-06-11 | 字段提取引导 | 按链接排序 | 模板基底导出');
 // =============================================
 const SUPABASE_URL = 'https://khrppyhcjzkkokyhnhhd.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtocnBweWhjanpra29reWhuaGhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwNzY1NDEsImV4cCI6MjA5NjY1MjU0MX0.uS9YablBNwjUmQlwRbLRw3SEPNgEnO1Uc6Poe1SeB88';
@@ -903,6 +903,15 @@ function restoreTemplateFromLocalStorage() {
         state.templates[platform].config = JSON.parse(configStr);
       } catch(e) {}
     }
+    // 恢复字段提取配置
+    var extractStr = localStorage.getItem('tpl_extract_' + platform);
+    if (extractStr) {
+      try {
+        var ec = JSON.parse(extractStr);
+        state.templates[platform].extractSheet = ec.sheet;
+        state.templates[platform].extractRow = ec.row;
+      } catch(e) {}
+    }
     
     // 如果当前平台有恢复，显示配置 UI
     if (platform === state.platform && state.templates[platform].sheetNames) {
@@ -979,12 +988,19 @@ function handleTemplateImport(input) {
       if (file.name.toLowerCase().endsWith('.csv')) {
         const text = new TextDecoder('utf-8').decode(arrayBuffer);
         wb = XLSX.read(text, { type: 'string' });
-        data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1 });
       } else {
         wb = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' });
-        data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1 });
       }
-      console.log('Parsed', data?.length, 'rows, sheets:', wb.SheetNames);
+
+      // 解析所有 Sheet（用于字段提取引导）
+      var allSheetData = {};
+      wb.SheetNames.forEach(function(sn) {
+        allSheetData[sn] = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, defval: '' });
+      });
+
+      // 默认读取第一个 Sheet 的数据
+      data = allSheetData[wb.SheetNames[0]] || [];
+      console.log('Parsed', data?.length, 'rows,', wb.SheetNames.length, 'sheets:', wb.SheetNames.join(', '));
 
       // 保存完整模板文件（ArrayBuffer → 数组存 state，base64 存 localStorage）
       const rawArray = Array.from(new Uint8Array(arrayBuffer));
@@ -1013,16 +1029,149 @@ function handleTemplateImport(input) {
         console.warn('localStorage 保存模板失败（可能超出大小限制）:', lsErr.message);
       }
 
-      // 显示模板配置 UI
-      showTemplateConfigUI(sheetNames, defaultConfig);
+      // 显示字段提取引导 UI（先选 Sheet+行号提取字段，再配置写入参数）
+      showFieldExtractionUI(sheetNames, allSheetData, sheetNames[0], 1, defaultConfig);
 
-      processTemplate(data, file.name, wb);
+      // processTemplate 延迟到用户确认字段提取后再调用
     } catch (err) {
       console.error('Parse error:', err);
       showToast('文件解析失败：' + (err.message || err), 'error');
     }
   };
   reader.readAsArrayBuffer(file);
+}
+
+
+// =============================================
+// 字段提取引导 UI（选择第几页 + 第几行来提取字段名）
+// =============================================
+function showFieldExtractionUI(sheetNames, allSheetData, defaultSheet, defaultRow, writeConfig) {
+  // 移除旧卡片
+  const oldCard = document.getElementById('fieldExtractionCard');
+  if (oldCard) oldCard.remove();
+
+  // 也移除旧的写入配置卡片（等确认提取后再显示）
+  const oldWriteCard = document.getElementById('templateConfigCard');
+  if (oldWriteCard) oldWriteCard.remove();
+
+  const sheetOptions = (sheetNames || ['Sheet1']).map(function(name) {
+    return '<option value="' + escHtml(name) + '" ' + (name === defaultSheet ? 'selected' : '') + '>' + escHtml(name) + '</option>';
+  }).join('');
+
+  // 初始预览行
+  var previewData = (allSheetData[defaultSheet] || [])[defaultRow - 1] || [];
+  var previewHtml = previewData.length > 0
+    ? previewData.map(function(cell, idx) {
+        var text = String(cell != null ? cell : '').trim();
+        return '<div style="display:flex;align-items:flex-start;gap:6px"><span style="color:var(--muted);min-width:24px">' + (idx+1) + '</span><span style="word-break:break-all">' + escHtml(text || '(空)') + '</span></div>';
+      }).join('')
+    : '<div style="color:var(--muted)">该行无数据</div>';
+
+  const cardHtml = `
+    <div id="fieldExtractionCard" class="card" style="margin-bottom:16px;border-left:4px solid #f59e0b;background:linear-gradient(135deg,#fffbeb,#fff7ed)">
+      <h3 style="margin-bottom:4px;font-size:.95rem">📋 字段提取配置</h3>
+      <p style="font-size:.78rem;color:var(--muted);margin-bottom:14px">请选择模板中哪一页（Sheet）的哪一行作为字段名来配置</p>
+      <div style="display:flex;gap:20px;align-items:flex-end;flex-wrap:wrap;margin-bottom:14px">
+        <div>
+          <label style="font-size:.82rem;color:var(--muted);display:block;margin-bottom:4px">字段所在 Sheet（第几页）</label>
+          <select id="extSheetName" class="form-ctrl" style="min-width:160px" onchange="onExtractionChange()">
+            ${sheetOptions}
+          </select>
+        </div>
+        <div>
+          <label style="font-size:.82rem;color:var(--muted);display:block;margin-bottom:4px">字段所在行号</label>
+          <input id="extRowNum" type="number" class="form-ctrl" value="${defaultRow}" min="1" max="100" style="width:90px" onchange="onExtractionChange()" />
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="onExtractionConfirm()" style="height:38px">✅ 确认提取</button>
+      </div>
+      <div style="font-size:.78rem;color:var(--muted);margin-bottom:6px">
+        模板共 ${sheetNames.length} 个 Sheet：${sheetNames.map(function(n,i){return '【'+(i+1)+'】'+n;}).join('、')}
+      </div>
+      <div id="extPreviewArea" style="background:#fafafa;border-radius:8px;padding:10px 14px;max-height:200px;overflow-y:auto;font-size:.78rem;line-height:1.7">
+        <div style="color:var(--muted);font-size:.75rem;margin-bottom:6px">📌 当前选中行预览（将作为字段名）：</div>
+        ${previewHtml}
+      </div>
+    </div>
+  `;
+
+  const uploadZone = document.getElementById('uploadZone');
+  if (uploadZone && uploadZone.parentNode) {
+    uploadZone.parentNode.insertBefore(createElementFromHtml(cardHtml), uploadZone.nextSibling);
+  }
+
+  // 保存 allSheetData 和 writeConfig 到全局临时变量，供 onExtractionChange 使用
+  window.__extractionData = { allSheetData: allSheetData, writeConfig: writeConfig || {} };
+}
+
+function onExtractionChange() {
+  var sheetSelect = document.getElementById('extSheetName');
+  var rowInput = document.getElementById('extRowNum');
+  var previewArea = document.getElementById('extPreviewArea');
+  if (!sheetSelect || !rowInput || !previewArea) return;
+
+  var sn = sheetSelect.value;
+  var rn = parseInt(rowInput.value) || 1;
+  var allSheetData = (window.__extractionData || {}).allSheetData || {};
+  var previewData = (allSheetData[sn] || [])[rn - 1] || [];
+
+  var previewHtml = previewData.length > 0
+    ? previewData.map(function(cell, idx) {
+        var text = String(cell != null ? cell : '').trim();
+        return '<div style="display:flex;align-items:flex-start;gap:6px"><span style="color:var(--muted);min-width:24px">' + (idx+1) + '</span><span style="word-break:break-all">' + escHtml(text || '(空)') + '</span></div>';
+      }).join('')
+    : '<div style="color:var(--muted)">该行无数据</div>';
+
+  previewArea.innerHTML = '<div style="color:var(--muted);font-size:.75rem;margin-bottom:6px">📌 当前选中行预览（将作为字段名）：</div>' + previewHtml;
+}
+
+function onExtractionConfirm() {
+  var sheetSelect = document.getElementById('extSheetName');
+  var rowInput = document.getElementById('extRowNum');
+  if (!sheetSelect || !rowInput) { showToast('请先选择 Sheet 和行号', 'warn'); return; }
+
+  var sn = sheetSelect.value;
+  var rn = parseInt(rowInput.value) || 1;
+  var allSheetData = (window.__extractionData || {}).allSheetData || {};
+  var writeConfig = (window.__extractionData || {}).writeConfig || {};
+
+  // 从选中的 Sheet 中提取数据（从选中行开始）
+  var sheetData = allSheetData[sn] || [];
+  var extractedData = sheetData.slice(rn - 1); // 从选中行开始，所有后续行
+  if (extractedData.length === 0) {
+    showToast('选中的 Sheet 无数据', 'error'); return;
+  }
+
+  // 保存用户的选择到 config
+  var platform = state.platform;
+  var tpl = state.templates[platform];
+  if (tpl) {
+    tpl.extractSheet = sn;
+    tpl.extractRow = rn;
+    // 更新 data 为提取后的数据
+    tpl.data = extractedData;
+  }
+
+  // 调用 processTemplate 用选中的行作为 header
+  processTemplate(extractedData, tpl ? tpl.filename : '');
+
+  // 显示写入配置 UI
+  var sheetNames = tpl ? tpl.sheetNames : [sn];
+  var config = writeConfig;
+  if (!config.sheetName) config.sheetName = sn;
+  if (!config.dataStartRow) config.dataStartRow = 6;
+  showTemplateConfigUI(sheetNames, config);
+
+  // 保存提取配置到 localStorage
+  try {
+    localStorage.setItem('tpl_extract_' + platform, JSON.stringify({ sheet: sn, row: rn }));
+  } catch(e) {}
+
+  // 移除字段提取卡片
+  var card = document.getElementById('fieldExtractionCard');
+  if (card) card.remove();
+
+  var fieldCount = document.getElementById('fieldList').querySelectorAll('tr').length;
+  showToast('已从【' + sn + '】第' + rn + '行提取 ' + fieldCount + ' 个字段', 'success');
 }
 
 // 显示模板配置 UI（选择 sheet + 数据起始行）
@@ -1150,7 +1299,9 @@ function processTemplate(data, filename) {
     assoc: '',       // 关联产品字段
   })).filter(f => f.name);
 
-  state.templates[state.platform] = { filename, data, fields };
+  // 合并而非覆盖，保留 rawData/sheetNames/config/allSheetData
+  var tpl = state.templates[state.platform];
+  state.templates[state.platform] = Object.assign(tpl || {}, { filename: filename, data: data, fields: fields });
   state.fieldConfigs[state.platform] = normalizeFields(fields);
 
   document.getElementById('importedFileName').textContent = '✓ ' + filename;
