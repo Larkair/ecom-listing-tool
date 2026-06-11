@@ -707,7 +707,7 @@ const MAX_IMG_PER_GROUP = 9;
 // =============================================
 // Supabase 初始化（容错：CDN 加载失败不影响核心功能）
 // =============================================
-console.log('🛠 批量上架工具 V28 | 2026-06-11 | 多尺度结构感知修复 | 配置方案标识 | 对比按钮优化');
+console.log('🛠 批量上架工具 V29 | 2026-06-11 | 图片导出列修复 | 模板持久化+云端备份');
 // =============================================
 const SUPABASE_URL = 'https://khrppyhcjzkkokyhnhhd.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtocnBweWhjanpra29reWhuaGhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwNzY1NDEsImV4cCI6MjA5NjY1MjU0MX0.uS9YablBNwjUmQlwRbLRw3SEPNgEnO1Uc6Poe1SeB88';
@@ -965,12 +965,14 @@ const state = {
 // 从 localStorage 恢复模板文件和配置
 // =============================================
 function restoreTemplateFromLocalStorage() {
-  ['shopee','lazada','tiktok'].forEach(function(platform) {
+  ['shopee','lazada','tiktok'].forEach(async function(platform) {
     const base64 = localStorage.getItem('tpl_raw_' + platform);
     const sheetsStr = localStorage.getItem('tpl_sheets_' + platform);
     const configStr = localStorage.getItem('tpl_config_' + platform);
+    const tplFilename = localStorage.getItem('tpl_filename_' + platform);
+    const storagePath = localStorage.getItem('tpl_storage_path_' + platform);
     
-    if (!base64 && !configStr) return; // 本平台无保存数据
+    if (!base64 && !configStr && !storagePath) return; // 本平台无保存数据
     
     if (!state.templates[platform]) state.templates[platform] = {};
     
@@ -981,6 +983,18 @@ function restoreTemplateFromLocalStorage() {
         state.templates[platform].rawData = Array.from(new Uint8Array(bytes));
         console.log('从 localStorage 恢复模板(' + platform + '), 大小:', bytes.byteLength, 'bytes');
       } catch(e) { console.warn('恢复模板文件失败(' + platform + '):', e.message); }
+    }
+    
+    // V29: 如果 localStorage 没有 rawData，尝试从 Supabase Storage 加载
+    if (!state.templates[platform].rawData && storagePath && sb) {
+      try {
+        var { data: dlData, error: dlErr } = await sb.storage.from('ecom-assets').download(storagePath);
+        if (!dlErr && dlData) {
+          var arrBuf = await dlData.arrayBuffer();
+          state.templates[platform].rawData = Array.from(new Uint8Array(arrBuf));
+          console.log('从 Supabase Storage 恢复模板(' + platform + '), 大小:', arrBuf.byteLength, 'bytes');
+        }
+      } catch(e2) { console.warn('Supabase Storage 恢复模板失败(' + platform + '):', e2.message); }
     }
     
     // 恢复 sheetNames
@@ -996,6 +1010,12 @@ function restoreTemplateFromLocalStorage() {
         state.templates[platform].config = JSON.parse(configStr);
       } catch(e) {}
     }
+    
+    // 恢复 filename
+    if (tplFilename) {
+      state.templates[platform].filename = tplFilename;
+    }
+    
     // 恢复字段提取配置
     var extractStr = localStorage.getItem('tpl_extract_' + platform);
     if (extractStr) {
@@ -1072,7 +1092,7 @@ function handleTemplateImport(input) {
   }
   const reader = new FileReader();
   reader.onerror = () => { showToast('文件读取失败', 'error'); };
-  reader.onload = (e) => {
+  reader.onload = async (e) => {
     try {
       const arrayBuffer = e.target.result;
       let data;
@@ -1113,14 +1133,39 @@ function handleTemplateImport(input) {
         config: defaultConfig
       };
       // 存到 localStorage（base64 编码，避免 Array 转 JSON 太大）
+      var tplSaved = false;
       try {
         const base64 = arrayBufferToBase64(rawArray);
         localStorage.setItem('tpl_raw_' + platform, base64);
         localStorage.setItem('tpl_sheets_' + platform, JSON.stringify(sheetNames));
         localStorage.setItem('tpl_config_' + platform, JSON.stringify(defaultConfig));
+        localStorage.setItem('tpl_filename_' + platform, file.name);
         console.log('模板已保存到 localStorage, base64 长度:', base64.length);
+        tplSaved = true;
       } catch (lsErr) {
-        console.warn('localStorage 保存模板失败（可能超出大小限制）:', lsErr.message);
+        console.error('localStorage 保存模板失败（可能超出大小限制）:', lsErr.message);
+        // 尝试只保存小数据（sheetNames + config，不含 rawData）
+        try {
+          localStorage.setItem('tpl_sheets_' + platform, JSON.stringify(sheetNames));
+          localStorage.setItem('tpl_config_' + platform, JSON.stringify(defaultConfig));
+          localStorage.setItem('tpl_filename_' + platform, file.name);
+        } catch(e2) {}
+        showToast('⚠️ 模板文件过大，无法保存到浏览器本地。刷新页面后模板将丢失，请重新导入！', 'error');
+      }
+      
+      // V29: 尝试上传模板到 Supabase Storage 作为持久备份
+      if (!tplSaved && sb) {
+        try {
+          var tplBlob = new Blob([new Uint8Array(arrayBuffer)], {type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+          var tplPath = 'templates/' + platform + '/' + file.name.replace(/[/\\:*?"<>|]/g, '_');
+          var { data: upData, error: upErr } = await sb.storage.from('ecom-assets').upload(tplPath, tplBlob, { upsert: true });
+          if (!upErr) {
+            console.log('模板已备份到 Supabase Storage:', tplPath);
+            localStorage.setItem('tpl_storage_path_' + platform, tplPath);
+            showToast('模板已备份到云端，刷新页面后可自动恢复');
+            tplSaved = true;
+          }
+        } catch(e3) { console.warn('Supabase 模板备份失败:', e3.message); }
       }
 
       // 显示字段提取引导 UI（先选 Sheet+行号提取字段，再配置写入参数）
@@ -1298,6 +1343,8 @@ function showTemplateConfigUI(sheetNames, currentConfig) {
   const oldCard = document.getElementById('templateConfigCard');
   if (oldCard) oldCard.remove();
 
+  const platform = state.platform;
+  const tplFilename = state.templates[platform]?.filename || '';
   const config = currentConfig || { sheetName: (sheetNames && sheetNames[0]) || 'Sheet1', dataStartRow: 6 };
   const sheetOptions = (sheetNames || ['Sheet1']).map(function(name) {
     return '<option value="' + escHtml(name) + '" ' + (name === config.sheetName ? 'selected' : '') + '>' + escHtml(name) + '</option>';
@@ -1305,7 +1352,7 @@ function showTemplateConfigUI(sheetNames, currentConfig) {
 
   const cardHtml = `
     <div id="templateConfigCard" class="card" style="margin-bottom:16px;border-left:4px solid #1677ff">
-      <h3 style="margin-bottom:4px;font-size:.95rem">⚙️ 模板写入配置</h3>
+      <h3 style="margin-bottom:4px;font-size:.95rem">⚙️ 模板写入配置 ${tplFilename ? '<span style="font-size:.72rem;color:var(--pri);font-weight:400">→ ' + escHtml(tplFilename) + '</span>' : ''}</h3>
       <p style="font-size:.73rem;color:#1677ff;margin-bottom:10px;background:#e6f4ff;padding:4px 8px;border-radius:4px;display:inline-block">💡 行号包含隐藏行，导出时模板全部格式（合并单元格、隐藏行列、样式等）均完整保留</p>
       <div style="display:flex;gap:20px;align-items:flex-end;flex-wrap:wrap">
         <div>
@@ -2704,8 +2751,10 @@ function buildExportData(includeTemplate) {
   var rows = [];
 
   // 找出图片类字段（按顺序），SKU图字段单独分组
+  // V29 fix: 只按 mode==='image' 过滤，排除 assoc==='链接图片管理' 的 SKU/image 杂散字段
+  // 否则 imgFields.length 被 inflate，导致 extraImgCols 从错误位置开始，丢失前面的图
   var imgFields = fields.map(function(f,i){ return {f:f, i:i}; }).filter(function(item){
-    return item.f.assoc === '链接图片管理' || item.f.mode === 'image';
+    return item.f.mode === 'image';
   });
   // V26: 动态计算需要多少图片列 — 修复"上传多张图只显示2张"的 Bug
   // 原逻辑：图片列数 = 配置的图片字段数，超出部分图片被丢弃
@@ -2795,7 +2844,8 @@ function buildExportData(includeTemplate) {
               return img ? img.dataUrl : '';
             }
 
-            if (f.mode === 'image' || f.assoc === '链接图片管理') {
+            // V29 fix: 只匹配 mode==='image' 字段，SKU/固定细节图由各自分支处理
+            if (f.mode === 'image') {
               var idx = imgFields.findIndex(function(item){ return item.i === fi; });
               if (idx < 0) return '';
               var ig = allLinkImages[idx];
@@ -3069,10 +3119,23 @@ async function exportExcelWithTemplate() {
   console.log('📤 exportExcelWithTemplate: config=', JSON.stringify(config), 'platform=', platform);
   console.log('📤 state.templates[' + platform + '] keys:', tpl ? Object.keys(tpl).join(', ') : 'null');
   console.log('📤 rawData type:', tpl && tpl.rawData ? (Array.isArray(tpl.rawData) ? 'Array(' + tpl.rawData.length + ')' : typeof tpl.rawData) : 'null');
+  console.log('📤 模板文件名:', tpl?.filename || '(未知)');
+  
+  // V29: 显示导出使用的模板名称
+  if (tpl?.filename) {
+    showToast('📄 导出模板: ' + tpl.filename + (config?.sheetName ? ' → ' + config.sheetName : ''), 'info');
+  }
   
   // 1. 获取模板原始 ArrayBuffer
   const rawData = await getTemplateRawData(platform);
-  if (!rawData) { showToast('模板文件已丢失，请重新导入模板', 'error'); return false; }
+  if (!rawData) {
+    showToast('模板文件已丢失，请重新导入模板文件！', 'error');
+    // 弹出提示：是否只用数据导出（不含模板格式）
+    if (confirm('模板文件已丢失。是否继续导出（仅数据，无模板格式）？')) {
+      return exportExcel();
+    }
+    return false;
+  }
   console.log('📤 getTemplateRawData 返回:', rawData.byteLength, 'bytes');
   
   // 2. 检查 ExcelJS 库
