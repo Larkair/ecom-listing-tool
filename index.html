@@ -196,7 +196,13 @@
     .ai-title-part-hd { font-weight: 600; font-size: .85rem; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
     .ai-title-part-hd .cbadge { width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center;
                                   justify-content: center; font-size: .72rem; font-weight: 700; color: #fff; }
+    .ai-title-part-hd .edit-part-btn { cursor:pointer;opacity:0;font-size:.68rem;color:var(--muted);margin-left:2px;transition:opacity .15s;border:none;background:none;padding:1px 3px;border-radius:3px }
+    .ai-title-part-hd:hover .edit-part-btn { opacity:1 }
+    .ai-title-part-hd .edit-part-btn:hover { color:var(--pri);background:var(--pri-l) }
     .b1 { background: #6366f1; } .b2 { background: #f97316; } .b3 { background: #10b981; } .b4 { background: #8b5cf6; }
+    .part-edit-inline { position:absolute;top:100%;left:0;right:0;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:var(--shadow-md);padding:10px;z-index:10;margin-top:4px }
+    .part-edit-inline input { width:100%;padding:4px 8px;border:1.5px solid var(--border);border-radius:5px;font-size:.78rem;margin-bottom:4px }
+    .part-edit-inline input:focus { outline:none;border-color:var(--pri) }
     .ai-result { background: var(--pri-l); border-radius: 8px; padding: 10px 12px; font-size: .88rem;
                  line-height: 1.6; color: var(--pri-d); margin-bottom: 6px; word-break: break-all;
                  display: flex; align-items: center; gap: 8px; cursor: pointer; }
@@ -279,6 +285,20 @@
     /* 去水印模块 */
     .wm-card canvas { transition: outline .15s; }
     .wm-card canvas:hover { outline: 2px solid var(--pri); outline-offset: -2px; }
+
+    /* 图片批量剪辑模块 */
+    .be-card { position:relative;overflow:hidden }
+    .be-card canvas { transition: outline .15s; }
+    .be-card canvas:hover { outline: 2px solid var(--pri); outline-offset: -2px; }
+    .be-edit-tools { display:flex;gap:6px;flex-wrap:wrap;align-items:center }
+    .be-edit-tools button { padding:4px 10px;font-size:.74rem;border-radius:6px;border:1.5px solid var(--border);background:var(--card);cursor:pointer;color:var(--text);transition:all .15s;display:inline-flex;align-items:center;gap:3px }
+    .be-edit-tools button:hover { border-color:var(--pri);color:var(--pri);background:var(--pri-l) }
+    .be-edit-tools button.active { background:var(--pri-l);border-color:var(--pri);color:var(--pri-d);font-weight:600 }
+    .be-modal-overlay { display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:600;align-items:center;justify-content:center }
+    .be-modal-overlay.open { display:flex }
+    .be-modal { background:#fff;border-radius:var(--radius);box-shadow:var(--shadow-md);max-width:95vw;max-height:92vh;overflow:auto;position:relative }
+    .be-crop-overlay { position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none }
+    .be-crop-box { position:absolute;border:2px dashed #fff;box-shadow:0 0 0 9999px rgba(0,0,0,.45);cursor:move;pointer-events:auto }
 
     /* 工具类 */
     .flex { display: flex; } .gap8 { gap: 8px; } .gap12 { gap: 12px; }
@@ -382,6 +402,10 @@
     <div class="sidebar-item" onclick="showPage('watermark',this)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2.69l5.66 5.66a8 8 0 11-11.31 0z"/><line x1="12" y1="8" x2="12" y2="14"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
       图片去水印
+    </div>
+    <div class="sidebar-item" onclick="showPage('batch-edit',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+      图片批量剪辑
     </div>
   </nav>
 
@@ -597,6 +621,58 @@
           <div style="font-size:3rem;margin-bottom:12px">📷</div>
           <p style="font-size:.95rem;margin-bottom:16px">拖拽图片到此处，或点击"上传图片"按钮</p>
           <button class="btn btn-primary" onclick="document.getElementById('wmFileInput').click()">选择图片文件</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ====== 图片批量剪辑 ====== -->
+    <div id="page-batch-edit" class="page">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:12px">
+        <div>
+          <h2 style="margin:0 0 4px;font-size:1.15rem">✂️ 图片批量剪辑 <span style="font-size:.65rem;background:linear-gradient(135deg,#1677ff,#722ed1);color:#fff;padding:2px 7px;border-radius:10px;vertical-align:middle;margin-left:4px">NEW</span></h2>
+          <p style="margin:0;font-size:.82rem;color:var(--muted)">上传图片 → 裁剪/旋转/翻转 → 批量导出（自动命名）</p>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap" id="beToolbar">
+          <button class="btn btn-outline btn-sm" onclick="document.getElementById('beFileInput').click()" id="beUploadBtn">
+            📁 上传图片
+          </button>
+          <input type="file" id="beFileInput" accept="image/*" multiple style="display:none" onchange="handleBeFileSelect(this)" />
+          <span style="font-size:.75rem;color:var(--muted);padding:6px 4px;user-select:none">🔗 同步：</span>
+          <label class="be-sync-label" id="beSyncCropBtn" onclick="toggleBeSyncType('crop')" style="cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:3px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-size:.75rem;color:var(--muted)">
+            <input type="checkbox" id="beSyncCropCheck" style="margin:0;accent-color:#1677ff;pointer-events:none" /> 裁剪
+          </label>
+          <label class="be-sync-label" id="beSyncRotateBtn" onclick="toggleBeSyncType('rotate')" style="cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:3px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-size:.75rem;color:var(--muted)">
+            <input type="checkbox" id="beSyncRotateCheck" style="margin:0;accent-color:#1677ff;pointer-events:none" /> 旋转
+          </label>
+          <label class="be-sync-label" id="beSyncFlipHBtn" onclick="toggleBeSyncType('flipH')" style="cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:3px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-size:.75rem;color:var(--muted)">
+            <input type="checkbox" id="beSyncFlipHCheck" style="margin:0;accent-color:#1677ff;pointer-events:none" /> 水平翻转
+          </label>
+          <label class="be-sync-label" id="beSyncFlipVBtn" onclick="toggleBeSyncType('flipV')" style="cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:3px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-size:.75rem;color:var(--muted)">
+            <input type="checkbox" id="beSyncFlipVCheck" style="margin:0;accent-color:#1677ff;pointer-events:none" /> 垂直翻转
+          </label>
+          <button class="btn btn-success btn-sm" onclick="exportBeImages()" id="beExportBtn" disabled>
+            💾 批量导出
+          </button>
+          <button class="btn btn-outline btn-sm btn-danger" onclick="clearBeAll()" id="beClearBtn" disabled>
+            🗑 清空
+          </button>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:16px;padding:10px 16px;background:linear-gradient(135deg,#eff6ff,#f0f9ff);border-left:4px solid #1677ff">
+        <div style="font-size:.8rem;color:var(--muted);display:flex;gap:24px;flex-wrap:wrap">
+          <span>✂️ 选中图片后点击下方工具栏进行<b>裁剪/旋转/翻转</b></span>
+          <span>🔗 勾选同步后，图1的对应操作<b>自动/手动同步到全部图片</b></span>
+          <span>💾 导出文件名 = <b>原名+(序号)</b>，首张选路径后全部同目录</span>
+        </div>
+      </div>
+
+      <!-- 图片网格 -->
+      <div id="beImageGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px">
+        <div id="beEmptyState" style="grid-column:1/-1;text-align:center;padding:60px 20px;color:var(--muted)">
+          <div style="font-size:3rem;margin-bottom:12px">🖼️</div>
+          <p style="font-size:.95rem;margin-bottom:16px">拖拽图片到此处，或点击"上传图片"按钮</p>
+          <button class="btn btn-primary" onclick="document.getElementById('beFileInput').click()">选择图片文件</button>
         </div>
       </div>
     </div>
@@ -960,7 +1036,20 @@ const state = {
   currentSchemeId: { shopee: null, lazada: null, tiktok: null },
   titleSchemes: { shopee: [], lazada: [], tiktok: [] },
   currentProductIdx: -1,
-  settings: { maxTitleLen: 120, genCount: 5, titleSep: ' ' }
+  settings: { maxTitleLen: 120, genCount: 5, titleSep: ' ',
+    titlePartDefs: [
+      {label:'①产品类型',hint:'品类/类目',cls:'b1'},
+      {label:'②核心卖点',hint:'主打特性',cls:'b2'},
+      {label:'③风格定位',hint:'设计风格',cls:'b3'},
+      {label:'④材质面料',hint:'材质/成分',cls:'b4'},
+      {label:'⑤工艺技术',hint:'制作工艺',cls:'b1'},
+      {label:'⑥适用场景',hint:'使用场合',cls:'b2'},
+      {label:'⑦适用人群',hint:'目标用户',cls:'b3'},
+      {label:'⑧颜色外观',hint:'颜色/图案',cls:'b4'},
+      {label:'⑨功能特性',hint:'特色功能',cls:'b1'},
+      {label:'⑩品牌系列',hint:'品牌/系列名',cls:'b2'}
+    ]
+  }
 };
 
 // 从 localStorage 恢复模板文件和配置
@@ -1926,6 +2015,17 @@ function updateCurrentSchemeBadge() {
 // =============================================
 // AI标题方案管理
 // =============================================
+// V35: 快速方案选择下拉
+function renderTitleQuickSelect() {
+  var schemes = state.titleSchemes[state.platform] || [];
+  if (schemes.length === 0) return '';
+  var opts = '<option value="">— 快速加载方案 —</option>';
+  opts += schemes.map(function(s) {
+    return '<option value="' + s.id + '">' + escHtml(s.scheme_name) + '</option>';
+  }).join('');
+  return '<select class="form-ctrl" style="width:auto;display:inline-block;margin-left:8px;font-size:.78rem;padding:4px 8px" onchange="if(this.value){loadTitleSchemeById(parseInt(this.value));this.value=\'\'}">' + opts + '</select>';
+}
+
 function openTitleSchemeModal() {
   document.getElementById('titleSchemeModal').classList.add('open');
   document.getElementById('newTitleSchemeName').value = '';
@@ -1951,7 +2051,8 @@ function renderTitleSchemeList() {
         '<div class="smeta">10个词汇库 · ' + (s.parts ? s.parts.filter(function(p){return p;}).length : 0) + ' 个非空部分 · ' + new Date(s.updated_at).toLocaleString('zh-CN') + '</div>' +
       '</div>' +
       '<div class="sactions">' +
-        '<button class="btn btn-outline btn-sm" onclick="event.stopPropagation();loadTitleSchemeById(' + s.id + ')">应用</button>' +
+        '<button class="btn btn-outline btn-sm" onclick="event.stopPropagation();loadTitleSchemeById(' + s.id + ')" title="应用到当前产品">📄 当前</button>' +
+        '<button class="btn btn-outline btn-sm" onclick="event.stopPropagation();applyTitleSchemeToAll(' + s.id + ')" title="应用到全部产品">📋 全部</button>' +
         '<button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteTitleSchemeById(' + s.id + ')">删除</button>' +
       '</div>' +
     '</div>';
@@ -1962,11 +2063,13 @@ async function saveTitleScheme() {
   var name = document.getElementById('newTitleSchemeName').value.trim();
   if (!name) { showToast('请输入方案名称', 'warn'); return }
 
-  // 读取当前所有产品的 AI 标题词汇（取第一个产品的数据）
+  // V35: 读取当前产品的 AI 标题词汇
   var platform = state.platform;
   var products = state.products[platform] || [];
-  var parts = products.length > 0 && products[0].aiTitleParts
-    ? products[0].aiTitleParts.map(function(p) { return p || ''; })
+  var curIdx = state.currentProductIdx;
+  var curProduct = (curIdx >= 0 && curIdx < products.length) ? products[curIdx] : null;
+  var parts = curProduct && curProduct.aiTitleParts
+    ? curProduct.aiTitleParts.map(function(p) { return p || ''; })
     : ['','','','','','','','','',''];
 
   var scheme = {
@@ -2015,20 +2118,44 @@ function loadTitleSchemeById(id) {
     if (parts.length > 10) parts = parts.slice(0, 10);
   }
 
-  // 应用到所有产品（当前平台）
+  // V35: 应用到当前产品（而非全部产品）
+  var products = state.products[platform] || [];
+  var curIdx = state.currentProductIdx;
+  if (curIdx >= 0 && curIdx < products.length) {
+    products[curIdx].aiTitleParts = parts.slice();
+    refreshCurrentProductView();
+  }
+
+  closeTitleSchemeModal();
+  showToast('已加载标题方案「' + scheme.scheme_name + '」到当前产品', 'success');
+}
+
+// V35: 将标题方案应用到全部产品
+function applyTitleSchemeToAll(id) {
+  var platform = state.platform;
+  var scheme = (state.titleSchemes[platform] || []).find(function(s) { return s.id === id; });
+  if (!scheme) return;
+
+  var parts = scheme.parts;
+  if (typeof parts === 'string') {
+    try { parts = JSON.parse(parts); } catch(e) { parts = ['','','','','','','','','','']; }
+  }
+  if (!Array.isArray(parts) || parts.length < 10) {
+    parts = (parts || []).concat(new Array(Math.max(0, 10 - (parts||[]).length)).fill(''));
+    if (parts.length > 10) parts = parts.slice(0, 10);
+  }
+
   var products = state.products[platform] || [];
   for (var i = 0; i < products.length; i++) {
     products[i].aiTitleParts = parts.slice();
   }
 
-  // 刷新当前产品界面
-  var currentIdx = state.currentProductIdx;
-  if (currentIdx >= 0 && currentIdx < products.length) {
+  var curIdx = state.currentProductIdx;
+  if (curIdx >= 0 && curIdx < products.length) {
     refreshCurrentProductView();
   }
-
   closeTitleSchemeModal();
-  showToast('已加载标题方案「' + scheme.scheme_name + '」', 'success');
+  showToast('已加载标题方案「' + scheme.scheme_name + '」到全部 ' + products.length + ' 个产品', 'success');
 }
 
 async function deleteTitleSchemeById(id) {
@@ -2057,23 +2184,53 @@ function refreshCurrentProductView() {
 function openSchemeSelector() {
   const schemes = state.configSchemes[state.platform];
   const container = document.getElementById('schemeSelectorList');
+  const hasExistingConfig = hasFieldConfig();
+  
   if (!schemes || schemes.length === 0) {
-    container.innerHTML = `
-      <div class="no-config-banner">
-        <h3>⚠ 无可用配置方案</h3>
-        <p>请先在「字段配置」中导入模板并保存为方案</p>
-        <button class="btn btn-primary" onclick="showPage('field-config',document.querySelectorAll('.sidebar-item')[0]);closeSchemeSelector()">去配置字段</button>
-      </div>`;
+    // V33: 无方案但有字段配置时，允许直接使用当前配置
+    var html = '<div class="no-config-banner"><h3>⚠ 无可用配置方案</h3>';
+    if (hasExistingConfig) {
+      html += '<p>当前已导入模板并配置了字段，可以：</p>';
+      html += '<div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:12px">';
+      html += '<button class="btn btn-primary" onclick="closeSchemeSelector();_doAddNewProduct()">📄 直接使用当前配置创建产品</button>';
+      html += '<button class="btn btn-outline" onclick="closeSchemeSelector()">取消</button>';
+      html += '</div>';
+    } else {
+      html += '<p>请先在「字段配置」中导入模板并保存为方案</p>';
+      html += '<button class="btn btn-primary" onclick="showPage(\'field-config\',document.querySelectorAll(\'.sidebar-item\')[0]);closeSchemeSelector()">去配置字段</button>';
+    }
+    html += '</div>';
+    container.innerHTML = html;
   } else {
-    container.innerHTML = schemes.map(s => `
-      <div class="scheme-item" style="cursor:pointer" onclick="selectSchemeAndCreate(${s.id})">
-        <div class="sicon">${s.scheme_name.charAt(0).toUpperCase()}</div>
-        <div class="sinfo">
-          <div class="sname">${escHtml(s.scheme_name)}</div>
-          <div class="smeta">${(s.field_configs||[]).length} 个字段 · ${s.template_filename||'无模板'}</div>
-        </div>
-        <span style="color:var(--pri);font-weight:600;font-size:.8rem">选择 →</span>
-      </div>`).join('');
+    // V33: 有方案时，列出所有方案供选择，并在顶部标注当前正在使用的方案
+    var currentName = state.currentSchemeName[state.platform];
+    var listHtml = '';
+    if (currentName) {
+      listHtml += '<div style="font-size:.78rem;color:var(--muted);margin-bottom:8px;padding:6px 10px;background:#f0fdf4;border-radius:6px">✅ 当前方案：<b>' + escHtml(currentName) + '</b></div>';
+    } else if (hasExistingConfig) {
+      listHtml += '<div style="font-size:.78rem;color:var(--muted);margin-bottom:8px;padding:6px 10px;background:#fff7ed;border-radius:6px">⚠ 当前未加载方案，字段可能不完整</div>';
+    }
+    listHtml += schemes.map(s => {
+      var isCurrent = s.scheme_name === currentName;
+      return '<div class="scheme-item' + (isCurrent ? ' selected' : '') + '" style="cursor:pointer" onclick="selectSchemeAndCreate(' + s.id + ')">' +
+        '<div class="sicon">' + s.scheme_name.charAt(0).toUpperCase() + '</div>' +
+        '<div class="sinfo">' +
+          '<div class="sname">' + escHtml(s.scheme_name) + (isCurrent ? ' <span class="current-scheme-badge">当前</span>' : '') + '</div>' +
+          '<div class="smeta">' + (s.field_configs||[]).length + ' 个字段 · ' + (s.template_filename||'无模板') + '</div>' +
+        '</div>' +
+        '<span style="color:var(--pri);font-weight:600;font-size:.8rem">选择 →</span>' +
+      '</div>';
+    }).join('');
+    // 添加"不使用方案，直接创建"选项
+    if (hasExistingConfig && !currentName) {
+      listHtml += '<div style="margin-top:10px;padding-top:10px;border-top:1px dashed var(--border)">';
+      listHtml += '<div class="scheme-item" style="cursor:pointer;background:#fafbff" onclick="closeSchemeSelector();_doAddNewProduct()">';
+      listHtml += '<div class="sicon" style="background:#f1f5f9;color:var(--muted)">📄</div>';
+      listHtml += '<div class="sinfo"><div class="sname">直接使用当前配置（不关联方案）</div><div class="smeta">使用已导入的字段配置创建产品</div></div>';
+      listHtml += '<span style="color:var(--muted);font-size:.78rem">跳过 →</span>';
+      listHtml += '</div></div>';
+    }
+    container.innerHTML = listHtml;
   }
   document.getElementById('schemeSelectorModal').classList.add('open');
 }
@@ -2085,7 +2242,7 @@ function closeSchemeSelector() {
 function selectSchemeAndCreate(id) {
   loadSchemeById(id);
   closeSchemeSelector();
-  addNewProduct();
+  _doAddNewProduct();
 }
 
 function hasFieldConfig() {
@@ -2104,11 +2261,11 @@ function getAssocKey(assoc) {
 // 产品信息模块
 // =============================================
 function addNewProduct() {
-  // 检查是否有字段配置
-  if (!hasFieldConfig()) {
-    openSchemeSelector();
-    return;
-  }
+  // V33: 始终引导用户选择关联的配置方案
+  openSchemeSelector();
+}
+
+function _doAddNewProduct() {
   const newProduct = {
     id: Date.now(),
     name: '新产品 ' + (state.products[state.platform].length + 1),
@@ -2128,6 +2285,7 @@ function addNewProduct() {
   renderProductList();
   renderProductForm(state.currentProductIdx);
   updateProductBadge();
+  showToast('新产品已创建，请填写信息', 'success');
 }
 
 function renderProductList() {
@@ -2239,20 +2397,22 @@ function renderProductForm(idx) {
         <div id="tab-title" class="tab-pane">
           <div class="section-title"><div class="num">④</div> AI 标题生成器</div>
           <p class="text-sm text-muted" style="margin-bottom:16px">在10个词汇库中各填入词汇（每行一个），系统随机组合生成不重复标题
+            ${renderTitleQuickSelect()}
             <button class="btn btn-outline btn-sm" onclick="openTitleSchemeModal()" style="margin-left:8px">📋 方案管理</button>
           </p>
           <div class="ai-title-grid">
-            ${[{label:'①产品类型',hint:'品类/类目',cls:'b1'},{label:'②核心卖点',hint:'主打特性',cls:'b2'},
-               {label:'③风格定位',hint:'设计风格',cls:'b3'},{label:'④材质面料',hint:'材质/成分',cls:'b4'},
-               {label:'⑤工艺技术',hint:'制作工艺',cls:'b1'},{label:'⑥适用场景',hint:'使用场合',cls:'b2'},
-               {label:'⑦适用人群',hint:'目标用户',cls:'b3'},{label:'⑧颜色外观',hint:'颜色/图案',cls:'b4'},
-               {label:'⑨功能特性',hint:'特色功能',cls:'b1'},{label:'⑩品牌系列',hint:'品牌/系列名',cls:'b2'}
-              ].map((p,pi)=>`
-              <div class="ai-title-part">
-                <div class="ai-title-part-hd"><span class="cbadge ${p.cls}">${pi+1}</span>${p.label}<span class="text-muted text-sm">（${p.hint}）</span></div>
+            ${(state.settings.titlePartDefs||[{label:'产品类型',hint:'品类',cls:'b1'},{label:'核心卖点',hint:'特性',cls:'b2'},
+               {label:'风格定位',hint:'风格',cls:'b3'},{label:'材质面料',hint:'材质',cls:'b4'},
+               {label:'工艺技术',hint:'工艺',cls:'b1'},{label:'适用场景',hint:'场景',cls:'b2'},
+               {label:'适用人群',hint:'用户',cls:'b3'},{label:'颜色外观',hint:'颜色',cls:'b4'},
+               {label:'功能特性',hint:'功能',cls:'b1'},{label:'品牌系列',hint:'品牌',cls:'b2'}
+              ]).map((p,pi)=>`
+              <div class="ai-title-part" style="position:relative">
+                <div class="ai-title-part-hd"><span class="cbadge ${p.cls}">${pi+1}</span><span class="part-label-text">${escHtml(p.label)}</span><span class="text-muted text-sm">（${escHtml(p.hint)}）</span><button class="edit-part-btn" onclick="event.stopPropagation();editTitlePartDef(${pi},this)" title="编辑名称">✎</button></div>
                 <textarea class="form-ctrl" rows="3" placeholder="每行一个词汇…" oninput="setTitlePart(${idx},${pi},this.value)">${escHtml(product.aiTitleParts[pi]||'')}</textarea>
               </div>`).join('')}
           </div>
+          <div style="margin-top:8px;text-align:right"><button class="btn btn-outline btn-sm" onclick="resetTitlePartDefs()">🔄 恢复默认名称</button></div>
           <div class="gen-count mt16">
             <label class="text-sm bold">生成数量：</label>
             <input type="number" class="form-ctrl" style="width:80px" value="${state.settings.genCount}" min="1" max="100" id="genCountInput_${idx}" />
@@ -2674,6 +2834,99 @@ function setFieldVal(idx, key, val) { state.products[state.platform][idx].fieldV
 function setStartCode(idx, val) { state.products[state.platform][idx].startCode = val; }
 function product_rename(idx, val) { state.products[state.platform][idx].name = val; }
 
+// =============================================
+// AI标题部分名称自定义编辑
+// =============================================
+function editTitlePartDef(pi, btn) {
+  var defs = state.settings.titlePartDefs || [];
+  if (!defs[pi]) return;
+  var p = defs[pi];
+  var parent = btn.closest('.ai-title-part-hd');
+
+  // 移除已有的编辑框
+  var existing = parent.querySelector('.part-edit-inline');
+  if (existing) { existing.remove(); return; }
+
+  // 移除其他编辑框
+  document.querySelectorAll('.part-edit-inline').forEach(function(el) { el.remove(); });
+
+  var inline = document.createElement('div');
+  inline.className = 'part-edit-inline';
+  inline.innerHTML =
+    '<input id="partEditLabel_' + pi + '" value="' + escHtml(p.label) + '" placeholder="名称（如：产品类型）" />' +
+    '<input id="partEditHint_' + pi + '" value="' + escHtml(p.hint) + '" placeholder="提示（如：品类/类目）" />' +
+    '<div style="display:flex;gap:6px;margin-top:4px">' +
+      '<button class="btn btn-primary btn-sm" onclick="saveTitlePartDef(' + pi + ')" style="flex:1;font-size:.72rem">✓ 确认</button>' +
+      '<button class="btn btn-outline btn-sm" onclick="event.target.closest(\'.part-edit-inline\').remove()" style="flex:1;font-size:.72rem">✕ 取消</button>' +
+    '</div>';
+  parent.appendChild(inline);
+
+  // 聚焦第一个输入框
+  setTimeout(function() {
+    var inp = document.getElementById('partEditLabel_' + pi);
+    if (inp) { inp.focus(); inp.select(); }
+  }, 50);
+}
+
+function saveTitlePartDef(pi) {
+  var defs = state.settings.titlePartDefs || [];
+  if (!defs[pi]) return;
+  var labelEl = document.getElementById('partEditLabel_' + pi);
+  var hintEl = document.getElementById('partEditHint_' + pi);
+  var newLabel = (labelEl ? labelEl.value.trim() : '') || defs[pi].label;
+  var newHint = (hintEl ? hintEl.value.trim() : '') || defs[pi].hint;
+  defs[pi].label = newLabel;
+  defs[pi].hint = newHint;
+  // 清除内联编辑框
+  var inline = document.querySelector('.part-edit-inline');
+  if (inline) inline.remove();
+  // 重新渲染产品表单
+  if (state.currentProductIdx >= 0) {
+    renderProductForm(state.currentProductIdx);
+  }
+  persistTitlePartDefs();
+  showToast('第' + (pi + 1) + '部分名称已更新', 'success');
+}
+
+function resetTitlePartDefs() {
+  var defaults = [
+    {label:'①产品类型',hint:'品类/类目',cls:'b1'},
+    {label:'②核心卖点',hint:'主打特性',cls:'b2'},
+    {label:'③风格定位',hint:'设计风格',cls:'b3'},
+    {label:'④材质面料',hint:'材质/成分',cls:'b4'},
+    {label:'⑤工艺技术',hint:'制作工艺',cls:'b1'},
+    {label:'⑥适用场景',hint:'使用场合',cls:'b2'},
+    {label:'⑦适用人群',hint:'目标用户',cls:'b3'},
+    {label:'⑧颜色外观',hint:'颜色/图案',cls:'b4'},
+    {label:'⑨功能特性',hint:'特色功能',cls:'b1'},
+    {label:'⑩品牌系列',hint:'品牌/系列名',cls:'b2'}
+  ];
+  state.settings.titlePartDefs = JSON.parse(JSON.stringify(defaults));
+  if (state.currentProductIdx >= 0) {
+    renderProductForm(state.currentProductIdx);
+  }
+  persistTitlePartDefs();
+  showToast('已恢复默认名称', 'success');
+}
+
+function persistTitlePartDefs() {
+  try {
+    localStorage.setItem('ecom_titlePartDefs', JSON.stringify(state.settings.titlePartDefs));
+  } catch(e) {}
+}
+
+function loadTitlePartDefs() {
+  try {
+    var saved = localStorage.getItem('ecom_titlePartDefs');
+    if (saved) {
+      var arr = JSON.parse(saved);
+      if (Array.isArray(arr) && arr.length === 10) {
+        state.settings.titlePartDefs = arr;
+      }
+    }
+  } catch(e) {}
+}
+
 function switchTab(btn, tabId) {
   btn.closest('.card-body').querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   btn.closest('.card-body').querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
@@ -2697,7 +2950,9 @@ function saveCurrentProduct() {
   try { localStorage.setItem('ecom_fallback', JSON.stringify({
     fieldConfigs: state.fieldConfigs, products: state.products, settings: state.settings
   })); } catch(_) {}
-  showToast('产品信息已保存', 'success');
+  // V33: 保存后自动同步到导出预览
+  refreshPreview();
+  showToast('产品信息已保存，已同步到导出预览', 'success');
   // 后台异步同步，不阻塞 UI
   debouncedSync();
 }
@@ -4369,6 +4624,651 @@ function updateWmButtons() {
   document.getElementById('wmClearBtn').disabled = !hasImages;
 }
 
+// =============================================
+// 图片批量剪辑
+// =============================================
+var beState = {
+  images: [],       // { id, file, name, dataUrl, width, height, canvas, edited, editedUrl, editCanvas }
+  nextId: 1,
+  syncCrop: false,
+  syncRotate: false,
+  syncFlipH: false,
+  syncFlipV: false,
+  lastCropParams: null,    // { left, top, resultW, resultH } — 图1最近一次裁剪参数
+  lastRotateAngle: null,   // 图1最近一次旋转角度 (90/-90/180)
+  lastFlipDir: null,       // 图1最近一次翻转方向 ('h'/'v')
+  currentOperation: null,  // 当前剪辑操作类型
+  lastSaveDir: null        // 用户上次选择的存储目录句柄
+};
+
+// 切换同步开关（V34: 四种独立同步）
+var _beSyncKeyMap = { crop: 'syncCrop', rotate: 'syncRotate', flipH: 'syncFlipH', flipV: 'syncFlipV' };
+var _beSyncCheckMap = { crop: 'beSyncCropCheck', rotate: 'beSyncRotateCheck', flipH: 'beSyncFlipHCheck', flipV: 'beSyncFlipVCheck' };
+var _beSyncBtnMap = { crop: 'beSyncCropBtn', rotate: 'beSyncRotateBtn', flipH: 'beSyncFlipHBtn', flipV: 'beSyncFlipVBtn' };
+
+function toggleBeSyncType(type) {
+  var key = _beSyncKeyMap[type];
+  var checkId = _beSyncCheckMap[type];
+  var btnId = _beSyncBtnMap[type];
+  var check = document.getElementById(checkId);
+  // 手动 toggle checkbox
+  check.checked = !check.checked;
+  beState[key] = check.checked;
+  var btn = document.getElementById(btnId);
+  if (check.checked) {
+    btn.style.background = '#e6f4ff';
+    btn.style.borderColor = '#1677ff';
+    btn.style.color = '#1677ff';
+    btn.style.fontWeight = '600';
+    // V34: 勾选后立即检查图1是否已有该操作，有则立即同步
+    if (beState.images.length > 1) {
+      if (type === 'crop' && beState.lastCropParams) {
+        syncBeEditToAll('crop', beState.lastCropParams);
+      } else if (type === 'rotate' && beState.lastRotateAngle !== null) {
+        syncBeEditToAll('rotate', beState.lastRotateAngle);
+      } else if (type === 'flipH' && beState.lastFlipDir === 'h') {
+        syncBeEditToAll('flip', 'h');
+      } else if (type === 'flipV' && beState.lastFlipDir === 'v') {
+        syncBeEditToAll('flip', 'v');
+      }
+    }
+  } else {
+    btn.style.background = 'var(--bg)';
+    btn.style.borderColor = 'var(--border)';
+    btn.style.color = 'var(--muted)';
+    btn.style.fontWeight = 'normal';
+  }
+}
+
+// 文件选择
+function handleBeFileSelect(input) {
+  if (!input.files || !input.files.length) return;
+  addBeImages(Array.from(input.files));
+  input.value = '';
+}
+
+// 拖拽支持
+function setupBeDragDrop() {
+  var grid = document.getElementById('beImageGrid');
+  if (!grid) return;
+  grid.addEventListener('dragover', function(e) { e.preventDefault(); grid.style.outline = '2px dashed var(--pri)'; });
+  grid.addEventListener('dragleave', function() { grid.style.outline = ''; });
+  grid.addEventListener('drop', function(e) {
+    e.preventDefault(); grid.style.outline = '';
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      addBeImages(Array.from(e.dataTransfer.files));
+    }
+  });
+}
+
+// 添加图片
+function addBeImages(files) {
+  var imgFiles = files.filter(function(f) { return f.type.startsWith('image/'); });
+  if (!imgFiles.length) { showToast('请选择图片文件', 'warn'); return; }
+  showToast('正在加载 ' + imgFiles.length + ' 张图片…', 'info');
+  var loaded = 0;
+  imgFiles.forEach(function(file) {
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      var img = new Image();
+      img.onload = function() {
+        var id = beState.nextId++;
+        var canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        var ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+
+        beState.images.push({
+          id: id, file: file, name: file.name,
+          dataUrl: e.target.result, width: img.width, height: img.height,
+          canvas: canvas, edited: false, editedUrl: null, editCanvas: null
+        });
+        loaded++;
+        if (loaded === imgFiles.length) {
+          renderBeGrid(); updateBeButtons();
+          showToast('已加载 ' + beState.images.length + ' 张图片', 'success');
+        }
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+// 渲染图片网格
+function renderBeGrid() {
+  var grid = document.getElementById('beImageGrid');
+  var emptyEl = document.getElementById('beEmptyState');
+  if (!beState.images.length) {
+    if (emptyEl) emptyEl.style.display = '';
+    grid.querySelectorAll('.be-card').forEach(function(c) { c.remove(); });
+    return;
+  }
+  if (emptyEl) emptyEl.style.display = 'none';
+  grid.querySelectorAll('.be-card').forEach(function(c) { c.remove(); });
+
+  beState.images.forEach(function(item, idx) {
+    var maxW = 350;
+    var displayW = Math.min(item.width, maxW);
+    var displayH = Math.round(item.height * (displayW / item.width));
+    if (displayH > 400) { displayH = 400; displayW = Math.round(item.width * (400 / item.height)); }
+
+    var card = document.createElement('div');
+    card.className = 'be-card card';
+    card.style.cssText = 'overflow:hidden;position:relative';
+    card.dataset.beId = item.id;
+
+    // 头部：名称 + 尺寸 + 状态
+    var header = document.createElement('div');
+    header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--border);font-size:.78rem;background:var(--bg);gap:8px';
+    var namePart = '<span style="font-weight:600;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escHtml(item.name) + '">' + escHtml(item.name) + '</span>';
+    var statusBadge = item.edited
+      ? '<span style="color:#059669;font-size:.7rem;font-weight:600">✓ 已剪辑</span>'
+      : '<span style="color:var(--muted);font-size:.7rem">待剪辑</span>';
+    var infoPart = '<span style="color:var(--muted);white-space:nowrap;font-size:.7rem">' + item.width + '×' + item.height + '</span>';
+    header.innerHTML = namePart + '<span style="display:flex;gap:8px;align-items:center">' + infoPart + statusBadge + '</span>';
+    card.appendChild(header);
+
+    // 图片预览
+    var body = document.createElement('div');
+    body.style.cssText = 'position:relative;display:flex;justify-content:center;background:#f0f0f0';
+
+    var previewCanvas = document.createElement('canvas');
+    previewCanvas.width = displayW;
+    previewCanvas.height = displayH;
+    previewCanvas.style.cssText = 'display:block;max-width:100%';
+    previewCanvas.dataset.beId = item.id;
+    previewCanvas.dataset.beIdx = idx;
+
+    var srcCanvas = item.edited && item.editCanvas ? item.editCanvas : item.canvas;
+    var ctx = previewCanvas.getContext('2d');
+    ctx.drawImage(srcCanvas, 0, 0, displayW, displayH);
+    body.appendChild(previewCanvas);
+
+    // 左下角：对比原图按钮（已剪辑时显示）
+    if (item.edited && item.editCanvas) {
+      var toggleBar = document.createElement('div');
+      toggleBar.style.cssText = 'position:absolute;bottom:4px;left:4px;pointer-events:none';
+      toggleBar.innerHTML = '<button class="btn btn-sm" style="font-size:.7rem;padding:2px 7px;background:rgba(255,255,255,0.75);color:#333;border:1px solid rgba(0,0,0,0.12);border-radius:4px;cursor:pointer;pointer-events:auto;backdrop-filter:blur(2px)" onclick="event.stopPropagation();toggleBeCompare(' + idx + ')">🔄 对比原图</button>';
+      body.appendChild(toggleBar);
+    }
+
+    card.appendChild(body);
+
+    // 底部工具栏
+    var tools = document.createElement('div');
+    tools.style.cssText = 'padding:6px 10px;border-top:1px solid var(--border);display:flex;gap:4px;flex-wrap:wrap;align-items:center';
+    tools.innerHTML =
+      '<div class="be-edit-tools">' +
+        '<button onclick="beCrop(' + idx + ')" title="像素裁剪"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2v14a2 2 0 002 2h14"/><path d="M18 22V8a2 2 0 00-2-2H2"/></svg> 裁剪</button>' +
+        '<button onclick="beRotate(' + idx + ',-90)" title="左旋90°">↺ 左旋</button>' +
+        '<button onclick="beRotate(' + idx + ',90)" title="右旋90°">↻ 右旋</button>' +
+        '<button onclick="beFlip(' + idx + ',\'h\')" title="水平翻转">↔ 水平翻转</button>' +
+        '<button onclick="beFlip(' + idx + ',\'v\')" title="垂直翻转">↕ 垂直翻转</button>' +
+        '<button onclick="beReset(' + idx + ')" title="还原" style="color:var(--danger);margin-left:auto">↩ 还原</button>' +
+      '</div>';
+    card.appendChild(tools);
+
+    grid.appendChild(card);
+  });
+}
+
+// 对比原图切换
+function toggleBeCompare(idx) {
+  var item = beState.images[idx];
+  if (!item || !item.edited) return;
+  // 临时切换：交换 canvas 和 editCanvas
+  var temp = item.canvas;
+  item.canvas = item.editCanvas;
+  item.editCanvas = temp;
+  renderBeGrid();
+  // 切回去
+  var temp2 = item.canvas;
+  item.canvas = item.editCanvas;
+  item.editCanvas = temp2;
+  setTimeout(function() { renderBeGrid(); }, 1500);
+  showToast('1.5秒后自动切回剪辑结果', 'info');
+}
+
+// 获取当前编辑画布（已编辑用 editCanvas，否则用 canvas 副本）
+function getBeEditCanvas(idx) {
+  var item = beState.images[idx];
+  if (item.editCanvas) return item.editCanvas;
+  // 创建副本
+  var copy = document.createElement('canvas');
+  copy.width = item.canvas.width;
+  copy.height = item.canvas.height;
+  copy.getContext('2d').drawImage(item.canvas, 0, 0);
+  item.editCanvas = copy;
+  return copy;
+}
+
+// 裁剪功能
+function beCrop(idx) {
+  var item = beState.images[idx];
+  var w = item.width, h = item.height;
+
+  // 创建裁剪模态窗口
+  var overlay = document.createElement('div');
+  overlay.className = 'be-modal-overlay open';
+  overlay.id = 'beCropModal';
+  overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+
+  var maxPreviewW = 600;
+  var scale = Math.min(1, maxPreviewW / Math.max(w, h));
+  var pw = Math.round(w * scale), ph = Math.round(h * scale);
+
+  overlay.innerHTML =
+    '<div class="be-modal" style="padding:20px;max-width:700px;width:95vw">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">' +
+        '<span style="font-weight:600;font-size:.95rem">✂️ 像素裁剪 - ' + escHtml(item.name) + '</span>' +
+        '<span style="color:var(--muted);font-size:.78rem">' + w + '×' + h + ' px</span>' +
+        '<button class="btn btn-outline btn-sm" onclick="document.getElementById(\'beCropModal\').remove()">✕ 关闭</button>' +
+      '</div>' +
+      '<div style="display:flex;gap:20px;flex-wrap:wrap">' +
+        // 预览区域
+        '<div style="flex:1;min-width:280px;text-align:center">' +
+          '<div style="position:relative;display:inline-block;border:1px solid var(--border);border-radius:4px;overflow:hidden;background:#f0f0f0">' +
+            '<canvas id="beCropPreview" width="' + pw + '" height="' + ph + '" style="display:block;max-width:100%"></canvas>' +
+            '<div id="beCropOverlay" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;background:rgba(0,0,0,0);border:2px dashed #1677ff;transform-origin:0 0"></div>' +
+          '</div>' +
+          '<div style="margin-top:6px;font-size:.72rem;color:var(--muted)">虚线区域 = 保留区域，外围 = 裁剪掉</div>' +
+        '</div>' +
+        // 输入区域
+        '<div style="width:200px">' +
+          '<div style="text-align:center;margin-bottom:6px;font-size:.78rem;color:var(--muted)">输入裁剪像素</div>' +
+          '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;text-align:center">' +
+            '<div></div>' +
+            '<div><input type="number" id="beCropTop" min="0" max="' + (h-1) + '" value="0" oninput="updateBeCropPreview(' + w + ',' + h + ',' + scale + ')" style="width:100%;padding:4px;text-align:center;border:1.5px solid var(--border);border-radius:4px;font-size:.78rem" /></div>' +
+            '<div></div>' +
+            '<div><input type="number" id="beCropLeft" min="0" max="' + (w-1) + '" value="0" oninput="updateBeCropPreview(' + w + ',' + h + ',' + scale + ')" style="width:100%;padding:4px;text-align:center;border:1.5px solid var(--border);border-radius:4px;font-size:.78rem" /></div>' +
+            '<div style="font-size:.7rem;color:var(--muted);align-self:center">↕</div>' +
+            '<div><input type="number" id="beCropRight" min="0" max="' + (w-1) + '" value="0" oninput="updateBeCropPreview(' + w + ',' + h + ',' + scale + ')" style="width:100%;padding:4px;text-align:center;border:1.5px solid var(--border);border-radius:4px;font-size:.78rem" /></div>' +
+            '<div></div>' +
+            '<div><input type="number" id="beCropBottom" min="0" max="' + (h-1) + '" value="0" oninput="updateBeCropPreview(' + w + ',' + h + ',' + scale + ')" style="width:100%;padding:4px;text-align:center;border:1.5px solid var(--border);border-radius:4px;font-size:.78rem" /></div>' +
+            '<div></div>' +
+          '</div>' +
+          '<div style="margin-top:4px;font-size:.68rem;color:var(--muted);text-align:center">' +
+            '<span style="color:#1677ff">上↑</span> <span style="color:#10b981">左←</span> <span style="color:#f97316">右→</span> <span style="color:#ef4444">下↓</span>' +
+          '</div>' +
+          '<div id="beCropResultText" style="margin-top:8px;font-size:.72rem;color:var(--text);text-align:center">结果: ' + w + '×' + h + '</div>' +
+          '<div style="margin-top:12px;display:flex;gap:8px;justify-content:center">' +
+            '<button class="btn btn-outline btn-sm" onclick="document.getElementById(\'beCropModal\').remove()">取消</button>' +
+            '<button class="btn btn-primary btn-sm" id="beCropConfirmBtn">✂️ 确认裁剪</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+
+  document.body.appendChild(overlay);
+
+  // 绘制预览
+  var previewCanvas = overlay.querySelector('#beCropPreview');
+  var srcCanvas = item.edited && item.editCanvas ? item.editCanvas : item.canvas;
+  previewCanvas.getContext('2d').drawImage(srcCanvas, 0, 0, pw, ph);
+
+  overlay._cropW = w;
+  overlay._cropH = h;
+  overlay._cropScale = scale;
+  overlay._cropIdx = idx;
+  overlay._srcCanvas = srcCanvas;
+}
+
+function updateBeCropPreview(origW, origH, scale) {
+  var top = parseInt(document.getElementById('beCropTop').value) || 0;
+  var right = parseInt(document.getElementById('beCropRight').value) || 0;
+  var bottom = parseInt(document.getElementById('beCropBottom').value) || 0;
+  var left = parseInt(document.getElementById('beCropLeft').value) || 0;
+
+  top = Math.max(0, Math.min(origH - 1, top));
+  right = Math.max(0, Math.min(origW - 1, right));
+  bottom = Math.max(0, Math.min(origH - 1, bottom));
+  left = Math.max(0, Math.min(origW - 1, left));
+
+  var resultW = origW - left - right;
+  var resultH = origH - top - bottom;
+
+  var overlay = document.querySelector('#beCropOverlay');
+  if (overlay) {
+    overlay.style.top = Math.round(top * scale) + 'px';
+    overlay.style.left = Math.round(left * scale) + 'px';
+    overlay.style.width = Math.round(resultW * scale) + 'px';
+    overlay.style.height = Math.round(resultH * scale) + 'px';
+    overlay.style.background = resultW > 0 && resultH > 0
+      ? 'rgba(22,119,255,0.08)'
+      : 'rgba(255,0,0,0.15)';
+    overlay.style.borderColor = resultW > 0 && resultH > 0 ? '#1677ff' : '#ef4444';
+  }
+
+  var resultText = document.getElementById('beCropResultText');
+  var confirmBtn = document.getElementById('beCropConfirmBtn');
+  if (resultText) {
+    if (resultW <= 0 || resultH <= 0) {
+      resultText.textContent = '⚠ 裁剪过度！剩余: ' + resultW + '×' + resultH;
+      resultText.style.color = '#ef4444';
+    } else {
+      resultText.textContent = '结果: ' + resultW + '×' + resultH + ' px';
+      resultText.style.color = 'var(--text)';
+    }
+  }
+  if (confirmBtn) {
+    confirmBtn.disabled = (resultW <= 0 || resultH <= 0);
+    confirmBtn.style.opacity = (resultW <= 0 || resultH <= 0) ? '0.5' : '1';
+  }
+
+  // 存储到 overlay
+  var modal = document.getElementById('beCropModal');
+  if (modal) {
+    modal._cropTop = top;
+    modal._cropRight = right;
+    modal._cropBottom = bottom;
+    modal._cropLeft = left;
+    modal._cropResultW = resultW;
+    modal._cropResultH = resultH;
+  }
+
+  // 绑定确认按钮
+  if (confirmBtn && !confirmBtn._bound) {
+    confirmBtn._bound = true;
+    confirmBtn.onclick = function() {
+      var m = document.getElementById('beCropModal');
+      if (!m) return;
+      var t = m._cropTop || 0, r = m._cropRight || 0, b = m._cropBottom || 0, l = m._cropLeft || 0;
+      var rw = m._cropResultW, rh = m._cropResultH;
+      var srcCanvas = m._srcCanvas;
+      var idx = m._cropIdx;
+      if (rw <= 0 || rh <= 0) { showToast('裁剪参数无效', 'warn'); return; }
+
+      applyBeCropEdit(idx, l, t, rw, rh, srcCanvas);
+      m.remove();
+    };
+  }
+}
+
+
+// 旋转功能
+function beRotate(idx, angle) {
+  applyBeEdit(idx, function(editC) {
+    var rotated = document.createElement('canvas');
+    if (angle === 90 || angle === -90) {
+      rotated.width = editC.height;
+      rotated.height = editC.width;
+    } else {
+      rotated.width = editC.width;
+      rotated.height = editC.height;
+    }
+    var ctx = rotated.getContext('2d');
+    ctx.translate(rotated.width / 2, rotated.height / 2);
+    ctx.rotate(angle * Math.PI / 180);
+    ctx.drawImage(editC, -editC.width / 2, -editC.height / 2);
+    return rotated;
+  });
+
+  // V34: 始终记录图1的旋转参数
+  if (idx === 0) { beState.lastRotateAngle = angle; }
+  if (beState.syncRotate && idx === 0) {
+    syncBeEditToAll('rotate', angle);
+  }
+}
+
+// 翻转功能
+function beFlip(idx, dir) {
+  applyBeEdit(idx, function(editC) {
+    var flipped = document.createElement('canvas');
+    flipped.width = editC.width;
+    flipped.height = editC.height;
+    var ctx = flipped.getContext('2d');
+    if (dir === 'h') {
+      ctx.translate(flipped.width, 0);
+      ctx.scale(-1, 1);
+    } else {
+      ctx.translate(0, flipped.height);
+      ctx.scale(1, -1);
+    }
+    ctx.drawImage(editC, 0, 0);
+    return flipped;
+  });
+
+  // V34: 始终记录图1的翻转方向
+  if (idx === 0) { beState.lastFlipDir = dir; }
+  var syncFlag = dir === 'h' ? beState.syncFlipH : beState.syncFlipV;
+  if (syncFlag && idx === 0) {
+    syncBeEditToAll('flip', dir);
+  }
+}
+
+// 应用编辑操作
+function applyBeEdit(idx, transformFn) {
+  var item = beState.images[idx];
+  var editC = getBeEditCanvas(idx);
+  var result = transformFn(editC);
+  item.editCanvas = result;
+  item.width = result.width;
+  item.height = result.height;
+  item.edited = true;
+  item.editedUrl = result.toDataURL('image/png');
+  renderBeGrid();
+  updateBeButtons();
+}
+
+// 应用裁剪编辑（像素裁剪）
+function applyBeCropEdit(idx, left, top, resultW, resultH, srcCanvas) {
+  applyBeEdit(idx, function(editC) {
+    var cropped = document.createElement('canvas');
+    cropped.width = resultW;
+    cropped.height = resultH;
+    cropped.getContext('2d').drawImage(editC, left, top, resultW, resultH, 0, 0, resultW, resultH);
+    return cropped;
+  });
+
+  // V34: 始终记录图1的裁剪参数（供后续手动同步使用）
+  if (idx === 0) {
+    beState.lastCropParams = { left: left, top: top, resultW: resultW, resultH: resultH };
+  }
+  if (beState.syncCrop && idx === 0) {
+    syncBeEditToAll('crop', { left: left, top: top, resultW: resultW, resultH: resultH });
+  }
+}
+
+// 同步编辑到所有图片
+function syncBeEditToAll(op, param) {
+  beState.images.forEach(function(item, i) {
+    if (i === 0) return; // 跳过图1（已处理）
+    var editC = getBeEditCanvas(i);
+    var result;
+    if (op === 'rotate') {
+      result = document.createElement('canvas');
+      if (param === 90 || param === -90) {
+        result.width = editC.height;
+        result.height = editC.width;
+      } else {
+        result.width = editC.width;
+        result.height = editC.height;
+      }
+      var ctx = result.getContext('2d');
+      ctx.translate(result.width / 2, result.height / 2);
+      ctx.rotate(param * Math.PI / 180);
+      ctx.drawImage(editC, -editC.width / 2, -editC.height / 2);
+    } else if (op === 'flip') {
+      result = document.createElement('canvas');
+      result.width = editC.width;
+      result.height = editC.height;
+      var ctx2 = result.getContext('2d');
+      if (param === 'h') {
+        ctx2.translate(result.width, 0);
+        ctx2.scale(-1, 1);
+      } else {
+        ctx2.translate(0, result.height);
+        ctx2.scale(1, -1);
+      }
+      ctx2.drawImage(editC, 0, 0);
+    } else if (op === 'crop') {
+      var cw = param.resultW, ch = param.resultH;
+      if (cw <= 0 || ch <= 0) return;
+      result = document.createElement('canvas');
+      result.width = cw;
+      result.height = ch;
+      result.getContext('2d').drawImage(editC, param.left, param.top, cw, ch, 0, 0, cw, ch);
+    }
+    if (result) {
+      item.editCanvas = result;
+      item.width = result.width;
+      item.height = result.height;
+      item.edited = true;
+      item.editedUrl = result.toDataURL('image/png');
+    }
+  });
+  renderBeGrid();
+  updateBeButtons();
+  showToast('已同步剪辑到全部 ' + beState.images.length + ' 张图片', 'success');
+}
+
+// 还原单张
+function beReset(idx) {
+  var item = beState.images[idx];
+  if (!item.edited) return;
+  item.editCanvas = null;
+  item.edited = false;
+  item.editedUrl = null;
+  var img = new Image();
+  img.onload = function() {
+    item.canvas = document.createElement('canvas');
+    item.canvas.width = img.width;
+    item.canvas.height = img.height;
+    item.canvas.getContext('2d').drawImage(img, 0, 0);
+    item.width = img.width;
+    item.height = img.height;
+    renderBeGrid();
+    updateBeButtons();
+  };
+  img.src = item.dataUrl;
+  showToast('已还原「' + item.name + '」', 'info');
+}
+
+// 批量导出
+async function exportBeImages() {
+  var hasEdited = false;
+  beState.images.forEach(function(item) { if (item.edited) hasEdited = true; });
+  if (!hasEdited) { showToast('请先对图片进行剪辑操作', 'warn'); return; }
+
+  if (typeof JSZip === 'undefined') {
+    showToast('JSZip 未加载，使用逐个下载模式', 'warn');
+    exportBeImagesFallback();
+    return;
+  }
+
+  var zip = new JSZip();
+  var nameCount = {};
+  var exportCount = 0;
+
+  beState.images.forEach(function(item, i) {
+    if (!item.edited || !item.editCanvas) return;
+    var dotIdx = item.name.lastIndexOf('.');
+    var baseName = dotIdx > 0 ? item.name.substring(0, dotIdx) : item.name;
+    var ext = dotIdx > 0 ? item.name.substring(dotIdx) : '.png';
+
+    if (!nameCount[baseName]) nameCount[baseName] = 0;
+    nameCount[baseName]++;
+    var newName = baseName + '(' + nameCount[baseName] + ')' + ext;
+
+    var dataUrl = item.editCanvas.toDataURL('image/png');
+    var base64Data = dataUrl.split(',')[1];
+    zip.file(newName, base64Data, { base64: true });
+    exportCount++;
+  });
+
+  if (exportCount === 0) {
+    showToast('没有可导出的图片', 'warn');
+    return;
+  }
+
+  try {
+    var blob = await zip.generateAsync({
+      type: 'blob',
+      compression: 'STORE'
+    });
+
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = '剪辑图片_' + exportCount + '张.zip';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+
+    showToast('✅ 已打包导出 ' + exportCount + ' 张图片（单文件ZIP）', 'success');
+  } catch (err) {
+    console.error('ZIP打包失败:', err);
+    exportBeImagesFallback();
+  }
+}
+
+// 回退：逐个下载
+function exportBeImagesFallback() {
+  var exportCount = 0;
+  var nameCount = {};
+
+  beState.images.forEach(function(item, i) {
+    if (!item.edited || !item.editCanvas) return;
+
+    var dotIdx = item.name.lastIndexOf('.');
+    var baseName = dotIdx > 0 ? item.name.substring(0, dotIdx) : item.name;
+    var ext = dotIdx > 0 ? item.name.substring(dotIdx) : '.png';
+
+    if (!nameCount[baseName]) nameCount[baseName] = 0;
+    nameCount[baseName]++;
+    var newName = baseName + '(' + nameCount[baseName] + ')' + ext;
+
+    var a = document.createElement('a');
+    a.href = item.editCanvas.toDataURL('image/png');
+    a.download = newName;
+    document.body.appendChild(a);
+    setTimeout(function() {
+      a.click();
+      document.body.removeChild(a);
+    }, exportCount * 200);
+    exportCount++;
+  });
+
+  if (exportCount === 0) {
+    showToast('没有可导出的图片', 'warn');
+  } else {
+    showToast('正在逐个导出 ' + exportCount + ' 张图片…', 'info');
+  }
+}
+
+// 清空所有
+function clearBeAll() {
+  if (!beState.images.length) return;
+  beState.images = [];
+  beState.lastSaveDir = null;
+  beState.lastCropParams = null;
+  beState.lastRotateAngle = null;
+  beState.lastFlipDir = null;
+  // 重置所有同步复选框
+  ['crop','rotate','flipH','flipV'].forEach(function(t) {
+    beState[_beSyncKeyMap[t]] = false;
+    var ck = document.getElementById(_beSyncCheckMap[t]);
+    var btn = document.getElementById(_beSyncBtnMap[t]);
+    if (ck) ck.checked = false;
+    if (btn) { btn.style.background = 'var(--bg)'; btn.style.borderColor = 'var(--border)'; btn.style.color = 'var(--muted)'; btn.style.fontWeight = 'normal'; }
+  });
+  renderBeGrid();
+  updateBeButtons();
+  showToast('已清空所有图片', 'info');
+}
+
+// 更新按钮状态
+function updateBeButtons() {
+  var hasImages = beState.images.length > 0;
+  var hasEdited = false;
+  beState.images.forEach(function(item) { if (item.edited) hasEdited = true; });
+  document.getElementById('beExportBtn').disabled = !hasEdited;
+  document.getElementById('beClearBtn').disabled = !hasImages;
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   // 检查 ExcelJS 是否加载成功
   console.log('🔍 ExcelJS 加载状态:', typeof ExcelJS !== 'undefined' ? '✅ 已加载 (v' + (ExcelJS.Workbook ? 'OK' : 'partial') + ')' : '❌ 未加载');
@@ -4380,12 +5280,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   showToast(sb ? '正在从云端加载数据…' : '云端未连接，使用离线模式', 'info');
   await loadDraft();
   restoreTemplateFromLocalStorage();
+  loadTitlePartDefs();
   document.querySelectorAll('.toast').forEach(t => t.remove());
   document.getElementById('uploadZone').addEventListener('click', () => {
     document.getElementById('templateFile').click();
   });
   // 设置去水印页面的拖拽上传
   setupWmDragDrop();
+  // 设置图片批量剪辑页面的拖拽上传
+  setupBeDragDrop();
   // 设置初始同步状态
   setSyncStatus(sb ? 'idle' : 'offline');
 });
