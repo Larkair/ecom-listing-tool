@@ -631,7 +631,8 @@
           <span>🖱 <b>鼠标拖拽</b>框选水印区域（可超出图片边界）</span>
           <span>🎨 红色区域 = 要移除的水印</span>
           <span>🔗 启用同步后，框选一张即可同步全部</span>
-          <span>↩ <b>右键点击</b>图片 = 撤销所有标记</span>
+          <span>↩ <b>右键框选区域</b> = 撤销该区域</span>
+          <span>↩↩ <b>双击图片</b> = 撤销所有标记</span>
           <span>🔄 可多次框选多个水印区域</span>
         </div>
       </div>
@@ -4283,6 +4284,17 @@ function copyMaskRegion(srcItem, dstItem) {
   dstMaskCtx.clearRect(0, 0, dstItem.width, dstItem.height);
   // 使用 drawImage 缩放，保留红色遮罩颜色（避免黑影bug）
   dstMaskCtx.drawImage(srcItem.maskCanvas, 0, 0, dstItem.width, dstItem.height);
+  // V40: 同步 maskRegions（深拷贝，按比例缩放）
+  var scaleW = dstItem.width / srcItem.width;
+  var scaleH = dstItem.height / srcItem.height;
+  dstItem.maskRegions = (srcItem.maskRegions || []).map(function(r) {
+    return {
+      x: Math.round(r.x * scaleW),
+      y: Math.round(r.y * scaleH),
+      w: Math.round(r.w * scaleW),
+      h: Math.round(r.h * scaleH)
+    };
+  });
 }
 
 // 文件选择
@@ -4340,7 +4352,8 @@ function addWmImages(files) {
           maskCanvas: maskCanvas,
           processed: false,
           processedUrl: null,
-          showResult: true  // true=显示结果, false=显示原图
+          showResult: true,  // true=显示结果, false=显示原图
+          maskRegions: []   // V40: 追踪每个框选区域 {x,y,w,h}
         });
         loaded++;
         if (loaded === imgFiles.length) {
@@ -4539,6 +4552,8 @@ function setupWmDrawing(previewCanvas, item, idx) {
       var maskCtx = item.maskCanvas.getContext('2d');
       maskCtx.fillStyle = '#ff0000';
       maskCtx.fillRect(x, y, w, h);
+      // V40: 记录框选区域
+      item.maskRegions.push({x: x, y: y, w: w, h: h});
 
       // 同步：将当前mask区域复制到所有其他图片
       if (wmState.syncEnabled && wmState.images.length > 1) {
@@ -4562,9 +4577,65 @@ function setupWmDrawing(previewCanvas, item, idx) {
     e.preventDefault();
   });
 
-  // 右键清除遮罩
+  // V40: 右键点击框选区域 → 撤销该区域
+  function redrawMaskFromRegions(item) {
+    var mc = item.maskCanvas.getContext('2d');
+    mc.clearRect(0, 0, item.width, item.height);
+    mc.fillStyle = '#ff0000';
+    (item.maskRegions || []).forEach(function(r) {
+      mc.fillRect(r.x, r.y, r.w, r.h);
+    });
+  }
+
   previewCanvas.addEventListener('contextmenu', function(e) {
     e.preventDefault();
+    var rect = previewCanvas.getBoundingClientRect();
+    var scaleX = item.width / rect.width;
+    var scaleY = item.height / rect.height;
+    var cx = (e.clientX - rect.left) * scaleX;
+    var cy = (e.clientY - rect.top) * scaleY;
+
+    // 查找被点击的区域（从后往前，优先匹配最新框选的）
+    var hitIdx = -1;
+    var regions = item.maskRegions || [];
+    for (var i = regions.length - 1; i >= 0; i--) {
+      var r = regions[i];
+      if (cx >= r.x && cx <= r.x + r.w && cy >= r.y && cy <= r.y + r.h) {
+        hitIdx = i;
+        break;
+      }
+    }
+
+    if (hitIdx >= 0) {
+      // 移除该区域
+      var removed = regions.splice(hitIdx, 1)[0];
+      redrawMaskFromRegions(item);
+      item.processed = false;
+      item.processedUrl = null;
+      item.resultCanvas = null;
+      item.showResult = true;
+
+      // 同步
+      if (wmState.syncEnabled && wmState.images.length > 1) {
+        wmState.images.forEach(function(dstItem, dstIdx) {
+          if (dstIdx === idx) return;
+          copyMaskRegion(item, dstItem);
+          dstItem.processed = false;
+          dstItem.processedUrl = null;
+        });
+      }
+      renderWmGrid();
+      updateWmButtons();
+      showToast('已撤销水印区域 (' + removed.w + '×' + removed.h + 'px)', 'info');
+    } else {
+      showToast('未命中任何水印区域（双击图片可撤销全部）', 'info');
+    }
+  });
+
+  // V40: 双击图片 → 撤销所有标记
+  previewCanvas.addEventListener('dblclick', function(e) {
+    e.preventDefault();
+    item.maskRegions = [];
     var maskCtx = item.maskCanvas.getContext('2d');
     maskCtx.clearRect(0, 0, item.width, item.height);
     item.processed = false;
@@ -4574,6 +4645,7 @@ function setupWmDrawing(previewCanvas, item, idx) {
     // 同步清除所有
     if (wmState.syncEnabled) {
       wmState.images.forEach(function(dstItem) {
+        dstItem.maskRegions = [];
         var dmc = dstItem.maskCanvas.getContext('2d');
         dmc.clearRect(0, 0, dstItem.width, dstItem.height);
         dstItem.processed = false;
