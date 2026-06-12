@@ -531,10 +531,18 @@
       <div class="flex gap12 items-center" style="margin-bottom:20px">
         <h2 style="font-size:1.1rem;font-weight:700">导出预览</h2>
         <div class="ml-auto flex gap8">
+          <!-- V43: 产品多选工具栏 -->
+          <span id="previewSelectBar" style="display:none;align-items:center;gap:8px;font-size:.82rem">
+            <label style="cursor:pointer;display:flex;align-items:center;gap:4px">
+              <input type="checkbox" id="previewSelectAll" onchange="togglePreviewSelectAll()" /> 全选
+            </label>
+            <span id="previewSelectedCount" style="color:var(--pri);font-weight:600">0</span> 个已选
+            <button class="btn btn-primary btn-sm" onclick="exportSelectedProducts()">📤 导出选中产品</button>
+          </span>
           <button class="btn btn-outline btn-sm" onclick="refreshPreview()">刷新预览</button>
           <button class="btn btn-success" onclick="startAsyncExport()">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            导出 Excel
+            导出全部
           </button>
           <button class="btn btn-outline btn-sm" onclick="openExportRecords()">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
@@ -547,6 +555,18 @@
         <div class="card-header">
           <div class="card-title">数据预览</div>
           <div class="card-sub" id="previewInfo">共 0 个产品</div>
+        </div>
+        <!-- V43: 产品多选面板 -->
+        <div id="previewProductSelectPanel" style="display:none;padding:10px 16px;border-bottom:1px solid var(--border);background:#fafafa">
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+            <label style="cursor:pointer;display:flex;align-items:center;gap:4px;font-size:.82rem;font-weight:500">
+              <input type="checkbox" id="previewSelectAllCb" onchange="togglePreviewSelectAllCb()" /> 全选产品
+            </label>
+            <span id="previewSelCount" style="color:var(--pri);font-weight:600;font-size:.82rem">已选 0 个</span>
+            <button class="btn btn-primary btn-sm" onclick="exportSelectedProducts()" id="exportSelectedBtn">📤 导出选中产品</button>
+            <span style="font-size:.75rem;color:var(--muted)">（仅导出选中产品，同一配置方案）</span>
+          </div>
+          <div id="previewProductCheckboxes" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;max-height:120px;overflow-y:auto"></div>
         </div>
         <div class="card-body">
           <div class="export-preview" id="exportPreviewTable">
@@ -897,7 +917,7 @@ const MAX_IMG_PER_GROUP = 9;
 // =============================================
 // Supabase 初始化（容错：CDN 加载失败不影响核心功能）
 // =============================================
-console.log('🛠 批量上架工具 V42 | 2026-06-12 | 去水印导出弹窗+裁剪框对齐修复 | Telea FMM | JSZip');
+console.log('🛠 批量上架工具 V43 | 2026-06-12 | 导出模板一致性强化+产品多选导出 | Telea FMM | JSZip');
 // =============================================
 const SUPABASE_URL = 'https://khrppyhcjzkkokyhnhhd.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtocnBweWhjanpra29reWhuaGhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwNzY1NDEsImV4cCI6MjA5NjY1MjU0MX0.uS9YablBNwjUmQlwRbLRw3SEPNgEnO1Uc6Poe1SeB88';
@@ -931,12 +951,15 @@ async function loadFromSupabase() {
         if (c.field_configs && c.field_configs.length > 0) {
           state.fieldConfigs[c.platform] = normalizeFields(c.field_configs);
         }
+        // V43: 保留已有 rawData/sheetNames/config 不被 ecom_configs 覆盖
+        // ecom_configs 仅存元数据（不含模板文件本体），恢复时必须保留已加载的模板文件
+        var existingTpl = state.templates[c.platform];
         if (c.template_headers && c.template_headers.length > 0) {
-          state.templates[c.platform] = {
-            filename: c.template_filename || '',
+          state.templates[c.platform] = Object.assign(existingTpl || {}, {
+            filename: c.template_filename || (existingTpl?.filename || ''),
             data: c.template_data?.length > 0 ? c.template_data : [c.template_headers],
             fields: c.field_configs || []
-          };
+          });
         }
       });
     }
@@ -1173,6 +1196,23 @@ const state = {
 // =============================================
 function restoreTemplateFromLocalStorage() {
   ['shopee','lazada','tiktok'].forEach(async function(platform) {
+    // V43: 如果 loadFromSupabase 已经通过方案恢复了模板的 rawData，优先保留
+    // 避免 localStorage 中残留的旧模板数据覆盖从方案/Supabase 加载的正确模板
+    var existingRawData = state.templates[platform] && state.templates[platform].rawData;
+    if (existingRawData && existingRawData.length > 0) {
+      console.log('📦 restoreTemplateFromLocalStorage: ' + platform + ' 已有 rawData(' + existingRawData.length + ' bytes)，跳过 localStorage 恢复');
+      // 但有 sheetNames/config 可以补充
+      var sheetsStr = localStorage.getItem('tpl_sheets_' + platform);
+      var configStr = localStorage.getItem('tpl_config_' + platform);
+      if (sheetsStr && !state.templates[platform].sheetNames) {
+        try { state.templates[platform].sheetNames = JSON.parse(sheetsStr); } catch(e) {}
+      }
+      if (configStr && !state.templates[platform].config) {
+        try { state.templates[platform].config = JSON.parse(configStr); } catch(e) {}
+      }
+      return; // 不覆盖
+    }
+    
     const base64 = localStorage.getItem('tpl_raw_' + platform);
     const sheetsStr = localStorage.getItem('tpl_sheets_' + platform);
     const configStr = localStorage.getItem('tpl_config_' + platform);
@@ -3122,11 +3162,13 @@ function styleLabel(i) {
 const FIXED_FIELDS = new Set(['类目','品牌','描述','重量','长度','宽度','高度','价格','库存','尺码表图片','面料','风格','领型','版型','机洗']);
 
 // V40: 支持传入 fields 参数，导出时使用方案关联的字段配置而非当前模板的
-function buildExportData(includeTemplate, optFields) {
+function buildExportData(includeTemplate, optFields, optProducts) {
   // includeTemplate: true = 包含模板行（用于预览），false = 仅数据行（用于导出写入模板）
+  // optProducts: V43 可选的产品过滤列表，为空则导出所有产品
   if (typeof includeTemplate === 'undefined') includeTemplate = false;
   const fields = optFields || state.fieldConfigs[state.platform];
-  const products = state.products[state.platform];
+  const allProducts = state.products[state.platform];
+  const products = (optProducts && optProducts.length > 0) ? optProducts : allProducts;
   const headers = fields.map(f => f.name);
   var colCount = fields.length;
   var rows = [];
@@ -3338,12 +3380,252 @@ function buildExportData(includeTemplate, optFields) {
 
 
 // =============================================
+// V43: 导出预览 — 产品多选导出
+// =============================================
+// state.previewSelectedProducts = Set of product indices (在 refreshPreview 中初始化)
+function renderPreviewProductCheckboxes() {
+  var products = state.products[state.platform] || [];
+  var panel = document.getElementById('previewProductSelectPanel');
+  var container = document.getElementById('previewProductCheckboxes');
+  var selCount = document.getElementById('previewSelCount');
+  
+  if (products.length === 0) {
+    panel.style.display = 'none';
+    return;
+  }
+  panel.style.display = 'block';
+  state.previewSelectedProducts = new Set();
+  
+  container.innerHTML = products.map(function(p, i) {
+    var schemeBadge = p.configSchemeName ? ' 📋' + p.configSchemeName : '';
+    return '<label style="cursor:pointer;display:inline-flex;align-items:center;gap:3px;font-size:.78rem;padding:2px 6px;border:1px solid var(--border);border-radius:4px;background:#fff;white-space:nowrap" data-pidx="' + i + '">' +
+      '<input type="checkbox" class="preview-prod-cb" data-pidx="' + i + '" onchange="onPreviewProductToggle()" /> ' +
+      escHtml(p.name || '产品' + (i+1)) + schemeBadge +
+      '</label>';
+  }).join('');
+  
+  selCount.textContent = '已选 0 个';
+  document.getElementById('previewSelectAllCb').checked = false;
+}
+
+function onPreviewProductToggle() {
+  var cbs = document.querySelectorAll('.preview-prod-cb');
+  state.previewSelectedProducts = new Set();
+  cbs.forEach(function(cb) {
+    if (cb.checked) state.previewSelectedProducts.add(parseInt(cb.dataset.pidx));
+  });
+  updatePreviewSelectionUI();
+}
+
+function togglePreviewSelectAllCb() {
+  var checked = document.getElementById('previewSelectAllCb').checked;
+  var cbs = document.querySelectorAll('.preview-prod-cb');
+  cbs.forEach(function(cb) { cb.checked = checked; });
+  onPreviewProductToggle();
+}
+
+// V43: 工具栏全选联动
+function togglePreviewSelectAll() {
+  var checked = document.getElementById('previewSelectAll').checked;
+  document.getElementById('previewSelectAllCb').checked = checked;
+  togglePreviewSelectAllCb();
+}
+
+function updatePreviewSelectionUI() {
+  var count = state.previewSelectedProducts.size;
+  document.getElementById('previewSelCount').textContent = '已选 ' + count + ' 个';
+  document.getElementById('exportSelectedBtn').disabled = count === 0;
+  document.getElementById('previewSelectAllCb').checked = 
+    count > 0 && count === document.querySelectorAll('.preview-prod-cb').length;
+  // 更新工具栏中的选中计数
+  var toolbarCount = document.getElementById('previewSelectedCount');
+  if (toolbarCount) toolbarCount.textContent = count;
+  var toolbarBar = document.getElementById('previewSelectBar');
+  if (toolbarBar) toolbarBar.style.display = count > 0 ? 'flex' : 'none';
+}
+
+// 导出选中的产品
+async function exportSelectedProducts() {
+  var platform = state.platform;
+  var products = state.products[platform];
+  if (!products.length) { showToast('没有产品', 'warn'); return; }
+  
+  var selectedIndices = Array.from(state.previewSelectedProducts || []);
+  if (selectedIndices.length === 0) { showToast('请先选择要导出的产品', 'warn'); return; }
+  
+  // V43: 必须同一配置方案
+  var selectedProducts = selectedIndices.map(function(i) { return products[i]; });
+  var schemeIds = new Set();
+  selectedProducts.forEach(function(p) {
+    if (p.configSchemeId) schemeIds.add(p.configSchemeId);
+  });
+  if (schemeIds.size > 1) {
+    showToast('所选产品必须属于同一配置方案，请重新选择', 'error');
+    return;
+  }
+  
+  var tpl = resolveExportTemplate(platform);
+  var confirmMsg = '即将仅导出 ' + selectedProducts.length + ' 个选中产品';
+  if (tpl && tpl.filename) {
+    confirmMsg += '，使用模板【' + tpl.filename + '】';
+  }
+  confirmMsg += '。\n\n确认继续？';
+  if (!confirm(confirmMsg)) return;
+  
+  _exportWithProducts(selectedProducts);
+}
+
+// V43: 带产品过滤的导出（内部函数，被 exportSelectedProducts 和 startAsyncExport 调用）
+async function _exportWithProducts(filteredProducts) {
+  var platform = state.platform;
+  var tpl = resolveExportTemplate(platform);
+  if (!tpl || !tpl.rawData) {
+    showToast('无法解析导出模板', 'error'); return;
+  }
+
+  // 创建导出记录
+  var record = {
+    id: Date.now(),
+    timestamp: new Date().toLocaleString('zh-CN'),
+    filename: '',
+    status: 'processing',
+    blob: null,
+    blobUrl: null,
+    platform: platform,
+    productCount: filteredProducts.length,
+    error: null
+  };
+  state.exportRecords.unshift(record);
+  updateExportRecordBadge();
+  renderExportRecordsIfOpen();
+  _currentExportRecordId = record.id;
+  
+  showToast('导出任务已开始（' + filteredProducts.length + ' 个产品）…', 'info');
+  
+  setTimeout(async function() {
+    try {
+      // 使用过滤后的产品构建导出数据
+      var rawData = new Uint8Array(tpl.rawData).buffer;
+      if (!rawData) { throw new Error('模板数据为空'); }
+      
+      if (typeof ExcelJS === 'undefined') {
+        throw new Error('ExcelJS 未加载');
+      }
+      
+      var workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(rawData);
+      
+      var config = tpl.config;
+      var worksheet = workbook.getWorksheet(config.sheetName);
+      if (!worksheet) { worksheet = workbook.worksheets[0]; }
+      if (!worksheet) { throw new Error('无可用 Sheet'); }
+      
+      var exportFields = (tpl && tpl.fields && tpl.fields.length > 0) ? tpl.fields : null;
+      var result = buildExportData(false, exportFields, filteredProducts);
+      var dataRows = result.rows;
+      if (!dataRows || !dataRows.length) { throw new Error('无数据可导出'); }
+      
+      // 图片上传
+      var imgCells = [];
+      for (var ri = 0; ri < dataRows.length; ri++) {
+        var row = dataRows[ri];
+        for (var ci = 0; ci < row.length; ci++) {
+          if (typeof row[ci] === 'string' && row[ci].startsWith('data:image')) {
+            imgCells.push({ ri: ri, ci: ci, dataUrl: row[ci], filename: 'img_' + ri + '_' + ci + '.jpg' });
+          }
+        }
+      }
+      
+      if (imgCells.length > 0 && sb) {
+        var BATCH = 25;
+        for (var i = 0; i < imgCells.length; i += BATCH) {
+          var batch = imgCells.slice(i, i + BATCH);
+          var results = await Promise.all(batch.map(function(cell) {
+            return uploadImageToStorage(cell.dataUrl, cell.filename).then(function(url) {
+              return { ri: cell.ri, ci: cell.ci, url: url };
+            });
+          }));
+          results.forEach(function(r) {
+            if (r.url) { dataRows[r.ri][r.ci] = r.url; }
+            else { dataRows[r.ri][r.ci] = '[图片:上传失败]'; }
+          });
+        }
+      } else if (imgCells.length > 0 && !sb) {
+        imgCells.forEach(function(cell) { dataRows[cell.ri][cell.ci] = '[图片:图床未连接]'; });
+      }
+      
+      // 清除并写入数据
+      var startRow = config.dataStartRow || 6;
+      var templateColCount = Math.max(worksheet.columnCount || 0, dataRows[0].length, 20);
+      var clearEndRow = Math.max(startRow + dataRows.length - 1, worksheet.rowCount || 0);
+      for (var cr = startRow; cr <= clearEndRow; cr++) {
+        for (var cc = 1; cc <= templateColCount; cc++) {
+          var cell = worksheet.getCell(cr, cc);
+          if (cell.value !== null && cell.value !== undefined) cell.value = null;
+        }
+      }
+      
+      for (var ri2 = 0; ri2 < dataRows.length; ri2++) {
+        var row2 = dataRows[ri2];
+        var excelRow = startRow + ri2;
+        for (var ci2 = 0; ci2 < row2.length; ci2++) {
+          worksheet.getCell(excelRow, ci2 + 1).value = (row2[ci2] != null && row2[ci2] !== '') ? row2[ci2] : null;
+        }
+      }
+      
+      var buffer = await workbook.xlsx.writeBuffer();
+      var pNames = { shopee:'Shopee', lazada:'Lazada', tiktok:'TikTok' };
+      var timestamp = new Date().toLocaleDateString('zh-CN').split('/').join('-');
+      var filename = pNames[platform] + '_批量上架_' + timestamp + '.xlsx';
+      
+      var blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      if (_currentExportRecordId) {
+        var rec = state.exportRecords.find(function(r) { return r.id === _currentExportRecordId; });
+        if (rec) {
+          rec.blob = blob;
+          rec.blobUrl = URL.createObjectURL(blob);
+          rec.filename = filename;
+          rec.status = 'done';
+          rec.sheetCount = workbook.worksheets.length;
+          rec.rowCount = dataRows.length;
+        }
+        updateExportRecordBadge();
+        renderExportRecordsIfOpen();
+        showToast('✅ 已导出 ' + filteredProducts.length + ' 个选中产品（' + dataRows.length + ' 行数据）', 'success');
+      } else {
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showToast('导出成功：' + filename, 'success');
+      }
+    } catch(e) {
+      console.error('导出失败:', e);
+      var rec2 = state.exportRecords.find(function(r) { return r.id === record.id; });
+      if (rec2) { rec2.status = 'failed'; rec2.error = e.message || '导出失败'; }
+      updateExportRecordBadge();
+      renderExportRecordsIfOpen();
+      showToast('导出失败：' + (e.message || '未知错误'), 'error');
+    }
+    _currentExportRecordId = null;
+  }, 30);
+}
+
+// =============================================
 // 导出预览（先渲染文本表格，再逐批加载缩略图，流畅不卡）
 // =============================================
 async function refreshPreview() {
   var fields = state.fieldConfigs[state.platform];
   var products = state.products[state.platform];
   var container = document.getElementById('exportPreviewTable');
+  
+  // V43: 渲染产品选择面板
+  renderPreviewProductCheckboxes();
+  
   if (!fields || !fields.length || !products.length) {
     container.innerHTML = '<div class="empty-state" style="padding:40px"><p>请先完成字段配置并填写产品信息</p></div>';
     document.getElementById('previewInfo').textContent = '共 0 个产品';
@@ -3795,6 +4077,22 @@ async function startAsyncExport() {
   if (!fields || !fields.length) { showToast('请先导入并配置字段', 'warn'); return; }
   if (!products.length) { showToast('请先添加产品信息', 'warn'); return; }
 
+  // V43: 导出前验证模板一致性 — 弹出确认对话框
+  // 解决模板不匹配的根源：导出前强制用户确认使用的模板文件
+  var platform = state.platform;
+  var tpl = resolveExportTemplate(platform);
+  var confirmMsg = '确认导出 ' + products.length + ' 个产品？';
+  if (tpl && tpl.filename) {
+    confirmMsg = '即将使用模板【' + tpl.filename + '】导出 ' + products.length + ' 个产品。\n\n';
+    if (tpl.config && tpl.config.sheetName) {
+      confirmMsg += '写入Sheet：「' + tpl.config.sheetName + '」，起始行：第' + (tpl.config.dataStartRow || 6) + '行\n\n';
+    }
+    confirmMsg += '确认继续导出吗？';
+    if (!confirm(confirmMsg)) return;
+  } else if (tpl && tpl.rawData) {
+    if (!confirm('模板文件存在但无名称信息，导出 ' + products.length + ' 个产品？')) return;
+  }
+
   // V37: 防重复提交 — 已有处理中的任务
   if (state.exportRecords.some(function(r) { return r.status === 'processing'; })) {
     showToast('已有导出任务正在处理中，请等待完成', 'warn');
@@ -4048,6 +4346,15 @@ function resolveExportTemplate(platform) {
       }
 
       console.log('  📄 返回方案模板:', resolvedTpl.filename);
+      // V43: 同步更新 state.templates[platform]，确保后续任何地方读取的都是正确模板
+      state.templates[platform] = resolvedTpl;
+      // 同时写入 localStorage 做持久化
+      try {
+        localStorage.setItem('tpl_raw_' + platform, scheme.template_rawdata);
+        localStorage.setItem('tpl_sheets_' + platform, JSON.stringify(resolvedTpl.sheetNames));
+        localStorage.setItem('tpl_config_' + platform, JSON.stringify(resolvedTpl.config));
+        if (resolvedTpl.filename) localStorage.setItem('tpl_filename_' + platform, resolvedTpl.filename);
+      } catch(e) {}
       console.groupEnd();
       return resolvedTpl;
     }
@@ -4224,6 +4531,33 @@ async function loadDraft() {
       });
     }
   } catch(e) { console.warn('恢复方案备份失败:', e.message); }
+  // V43: 恢复 currentSchemeId — 从当前平台第一个产品的 configSchemeId 推断
+  // 确保新增产品时能正确关联方案（避免 page refresh 后 currentSchemeId 丢失）
+  var plat = state.platform;
+  var products = state.products[plat] || [];
+  if (products.length > 0 && !state.currentSchemeId[plat]) {
+    var firstProduct = products[0];
+    if (firstProduct.configSchemeId) {
+      state.currentSchemeId[plat] = firstProduct.configSchemeId;
+      state.currentSchemeName[plat] = firstProduct.configSchemeName || '';
+      console.log('📋 从产品恢复 currentSchemeId:', state.currentSchemeId[plat], state.currentSchemeName[plat]);
+    }
+  }
+  // V43: 如果 state.templates[platform] 已有 rawData（从 loadFromSupabase 保留），
+  // 但 currentSchemeId 对应的方案有更准确的 rawData，优先用方案的
+  // 这解决了 core 问题：导出时 resolveExportTemplate 在不同调用时机可能拿到不同模板
+  if (state.currentSchemeId[plat] && state.templates[plat]) {
+    var schemes = state.configSchemes[plat] || [];
+    var activeScheme = schemes.find(function(s) { return s.id == state.currentSchemeId[plat]; });
+    if (activeScheme && activeScheme.template_rawdata) {
+      try {
+        var rawBuf = base64ToArrayBuffer(activeScheme.template_rawdata);
+        state.templates[plat].rawData = Array.from(new Uint8Array(rawBuf));
+        if (activeScheme.template_filename) state.templates[plat].filename = activeScheme.template_filename;
+        console.log('📋 loadDraft: 已用活动方案的 rawData 更新 state.templates[' + plat + '], 大小=' + rawBuf.byteLength + ', 文件=' + activeScheme.template_filename);
+      } catch(e) { console.warn('loadDraft 方案 rawData 恢复失败:', e.message); }
+    }
+  }
   // 标题方案本地恢复
   try {
     var tSchSaved = localStorage.getItem('ecom_title_schemes_fallback');
