@@ -300,6 +300,22 @@
     .be-crop-overlay { position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none }
     .be-crop-box { position:absolute;border:2px dashed #fff;box-shadow:0 0 0 9999px rgba(0,0,0,.45);cursor:move;pointer-events:auto }
 
+    /* V37: 导出记录 */
+    .er-item { display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--border);transition:background .15s }
+    .er-item:hover { background:#f8fafc }
+    .er-item:last-child { border-bottom:none }
+    .er-status-dot { width:8px;height:8px;border-radius:50%;flex-shrink:0 }
+    .er-status-dot.processing { background:#f59e0b;animation:er-pulse 1.2s ease-in-out infinite }
+    .er-status-dot.done { background:#10b981 }
+    .er-status-dot.failed { background:#ef4444 }
+    .er-info { flex:1;min-width:0 }
+    .er-time { font-size:.82rem;font-weight:600;color:var(--text) }
+    .er-meta { font-size:.72rem;color:var(--muted);margin-top:2px }
+    .er-dl-btn { white-space:nowrap;font-size:.78rem }
+    .er-spinner { display:inline-block;width:16px;height:16px;border:2px solid var(--border);border-top-color:var(--pri);border-radius:50%;animation:er-spin .6s linear infinite;vertical-align:middle }
+    @keyframes er-spin { to { transform:rotate(360deg) } }
+    @keyframes er-pulse { 0%,100% { opacity:1 } 50% { opacity:.4 } }
+
     /* 工具类 */
     .flex { display: flex; } .gap8 { gap: 8px; } .gap12 { gap: 12px; }
     .items-center { align-items: center; } .flex-wrap { flex-wrap: wrap; }
@@ -516,9 +532,14 @@
         <h2 style="font-size:1.1rem;font-weight:700">导出预览</h2>
         <div class="ml-auto flex gap8">
           <button class="btn btn-outline btn-sm" onclick="refreshPreview()">刷新预览</button>
-          <button class="btn btn-success" onclick="exportExcel()">
+          <button class="btn btn-success" onclick="startAsyncExport()">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             导出 Excel
+          </button>
+          <button class="btn btn-outline btn-sm" onclick="openExportRecords()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            导出记录
+            <span id="exportRecordBadge" style="display:none;background:var(--pri);color:#fff;border-radius:10px;padding:1px 6px;font-size:.65rem;margin-left:4px">0</span>
           </button>
         </div>
       </div>
@@ -766,6 +787,23 @@
         <div style="margin-top:16px;text-align:right;display:flex;gap:8px;justify-content:flex-end">
           <button class="btn btn-outline" onclick="closeBeExportModal()">取消</button>
           <button class="btn btn-primary" onclick="doExportBeImages()">✅ 确认导出</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ====== 导出记录弹窗 ====== -->
+    <div class="modal-overlay" id="exportRecordsModal">
+      <div class="modal" style="width:560px;max-height:80vh;overflow-y:auto">
+        <div class="modal-header">
+          <div class="modal-title">📋 导出记录</div>
+          <button class="modal-close" onclick="closeExportRecords()">×</button>
+        </div>
+        <div id="exportRecordsList" style="padding:4px 0;min-height:100px">
+          <div style="text-align:center;color:var(--muted);padding:40px">暂无导出记录</div>
+        </div>
+        <div style="margin-top:12px;text-align:right;border-top:1px solid var(--border);padding-top:12px;display:flex;gap:8px;justify-content:flex-end">
+          <button class="btn btn-outline btn-sm" onclick="cleanupExportRecords()" id="cleanupRecordsBtn" style="display:none">清空已完成</button>
+          <button class="btn btn-outline btn-sm" onclick="closeExportRecords()">关闭</button>
         </div>
       </div>
     </div>
@@ -1072,6 +1110,7 @@ const state = {
   currentSchemeName: { shopee: '', lazada: '', tiktok: '' },
   currentSchemeId: { shopee: null, lazada: null, tiktok: null },
   titleSchemes: { shopee: [], lazada: [], tiktok: [] },
+  exportRecords: [],      // V37: 导出记录 [{ id, timestamp, filename, status, blob, sheetCount, rowCount, error }]
   currentProductIdx: -1,
   settings: { maxTitleLen: 120, genCount: 5, titleSep: ' ',
     titlePartDefs: [
@@ -3487,7 +3526,7 @@ async function exportExcelWithTemplate() {
   
   if (imgCells.length > 0 && sb) {
     showToast('正在上传 ' + imgCells.length + ' 张图片到图床…', 'info');
-    const BATCH = 10;
+    const BATCH = 25; // V37: 提升并发数加速导出
     let failCount = 0;
     for (let i = 0; i < imgCells.length; i += BATCH) {
       const batch = imgCells.slice(i, i + BATCH);
@@ -3558,8 +3597,25 @@ async function exportExcelWithTemplate() {
   const timestamp = new Date().toLocaleDateString('zh-CN').split('/').join('-');
   const filename = pNames[platform] + '_批量上架_' + timestamp + '.xlsx';
   
+  // V37: 异步导出模式 — 存储到记录而非直接下载
+  var blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  if (_currentExportRecordId) {
+    var rec = state.exportRecords.find(function(r) { return r.id === _currentExportRecordId; });
+    if (rec) {
+      rec.blob = blob;
+      rec.blobUrl = URL.createObjectURL(blob);
+      rec.filename = filename;
+      rec.status = 'done';
+      rec.sheetCount = workbook.worksheets.length;
+      rec.rowCount = dataRows.length;
+    }
+    updateExportRecordBadge();
+    renderExportRecordsIfOpen();
+    showToast('导出完成！请在「导出记录」中下载', 'success');
+    return true;
+  }
+
   // 触发下载
-  const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -3628,10 +3684,211 @@ async function exportExcelWithTemplateFallback() {
   const pNames = { shopee:'Shopee', lazada:'Lazada', tiktok:'TikTok' };
   const timestamp = new Date().toLocaleDateString('zh-CN').split('/').join('-');
   const filename = pNames[platform] + '_批量上架_' + timestamp + '.xlsx';
+
+  // V37: 异步导出模式 — 存储到记录
+  var wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  var blob = new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  if (_currentExportRecordId) {
+    var rec = state.exportRecords.find(function(r) { return r.id === _currentExportRecordId; });
+    if (rec) {
+      rec.blob = blob;
+      rec.blobUrl = URL.createObjectURL(blob);
+      rec.filename = filename;
+      rec.status = 'done';
+      rec.rowCount = dataRows.length;
+    }
+    updateExportRecordBadge();
+    renderExportRecordsIfOpen();
+    showToast('导出完成（备用方式）！请在「导出记录」中下载', 'warn');
+    return true;
+  }
+
   XLSX.writeFile(wb, filename);
   
   showToast('导出成功（备用方式，格式可能不完整）：' + filename, 'warn');
   return true;
+}
+
+// =============================================
+// V37: 异步导出 + 导出记录
+// =============================================
+var _currentExportRecordId = null;
+
+async function startAsyncExport() {
+  var fields = state.fieldConfigs[state.platform];
+  var products = state.products[state.platform];
+  if (!fields || !fields.length) { showToast('请先导入并配置字段', 'warn'); return; }
+  if (!products.length) { showToast('请先添加产品信息', 'warn'); return; }
+
+  // V37: 防重复提交 — 已有处理中的任务
+  if (state.exportRecords.some(function(r) { return r.status === 'processing'; })) {
+    showToast('已有导出任务正在处理中，请等待完成', 'warn');
+    return;
+  }
+
+  var record = {
+    id: Date.now(),
+    timestamp: new Date().toLocaleString('zh-CN'),
+    filename: '',
+    status: 'processing',
+    blob: null,
+    blobUrl: null,
+    platform: state.platform,
+    productCount: products.length,
+    error: null
+  };
+  state.exportRecords.unshift(record);
+  updateExportRecordBadge();
+  renderExportRecordsIfOpen();
+  showToast('导出任务已开始，请查看「导出记录」', 'info');
+
+  _currentExportRecordId = record.id;
+  var exportPlatform = state.platform; // V37: 捕获当前平台，防止导出过程中切换
+
+  setTimeout(async function() {
+    var savedPlatform = state.platform;
+    if (savedPlatform !== exportPlatform) {
+      // 用户在导出过程中切换了平台，暂存并恢复
+      state.platform = exportPlatform;
+    }
+    try {
+      await exportExcel();
+      var rec = state.exportRecords.find(function(r) { return r.id === record.id; });
+      if (rec && rec.status === 'processing') {
+        rec.status = 'done';
+        rec.filename = '导出完成';
+        rec.error = '文件已生成，可在记录中下载';
+      }
+    } catch(e) {
+      console.error('Async export error:', e);
+      var rec2 = state.exportRecords.find(function(r) { return r.id === record.id; });
+      if (rec2) {
+        rec2.status = 'failed';
+        rec2.error = e.message || '导出失败';
+      }
+    }
+    _currentExportRecordId = null;
+    updateExportRecordBadge();
+    renderExportRecordsIfOpen();
+    if (state.platform !== savedPlatform) {
+      state.platform = savedPlatform; // 恢复用户切换的平台
+    }
+  }, 30);
+}
+
+// 导出记录管理
+function openExportRecords() {
+  document.getElementById('exportRecordsModal').classList.add('open');
+  renderExportRecords();
+}
+
+function closeExportRecords() {
+  document.getElementById('exportRecordsModal').classList.remove('open');
+}
+
+function renderExportRecordsIfOpen() {
+  if (document.getElementById('exportRecordsModal').classList.contains('open')) {
+    renderExportRecords();
+  }
+}
+
+function renderExportRecords() {
+  var container = document.getElementById('exportRecordsList');
+  var cleanupBtn = document.getElementById('cleanupRecordsBtn');
+  var records = state.exportRecords;
+
+  if (!records || records.length === 0) {
+    container.innerHTML = '<div style="text-align:center;color:var(--muted);padding:40px">暂无导出记录</div>';
+    if (cleanupBtn) cleanupBtn.style.display = 'none';
+    updateExportRecordBadge();
+    return;
+  }
+
+  var hasDone = records.some(function(r) { return r.status === 'done' || r.status === 'failed'; });
+  if (cleanupBtn) cleanupBtn.style.display = hasDone ? 'inline-flex' : 'none';
+
+  container.innerHTML = records.map(function(r) {
+    var statusClass = r.status;
+    var statusText = r.status === 'processing' ? '处理中…' : r.status === 'done' ? '已完成' : '失败';
+    var timeStr = r.timestamp;
+    var metaParts = [];
+    if (r.platform) metaParts.push({ shopee: 'Shopee', lazada: 'Lazada', tiktok: 'TikTok' }[r.platform] || r.platform);
+    if (r.productCount) metaParts.push(r.productCount + ' 个产品');
+    if (r.rowCount) metaParts.push(r.rowCount + ' 行数据');
+    if (r.sheetCount) metaParts.push(r.sheetCount + ' 个Sheet');
+    var metaStr = metaParts.join(' · ');
+
+    var rightSide = '';
+    if (r.status === 'processing') {
+      rightSide = '<span class="er-spinner"></span>';
+    } else if (r.status === 'done') {
+      if (r.blobUrl) {
+        rightSide = '<button class="btn btn-primary btn-sm er-dl-btn" onclick="downloadExportRecord(' + r.id + ')">📥 下载</button>';
+      } else {
+        rightSide = '<span style="color:var(--muted);font-size:.75rem">无文件</span>';
+      }
+    } else {
+      rightSide = '<span style="color:#ef4444;font-size:.75rem">' + (r.error || '失败') + '</span>';
+    }
+
+    return '<div class="er-item">' +
+      '<div class="er-status-dot ' + statusClass + '"></div>' +
+      '<div class="er-info">' +
+        '<div class="er-time">' + timeStr + ' <span style="font-weight:400;font-size:.72rem;color:var(--muted)">' + statusText + '</span></div>' +
+        '<div class="er-meta">' + metaStr + (r.filename ? ' · ' + r.filename : '') + '</div>' +
+      '</div>' +
+      rightSide +
+    '</div>';
+  }).join('');
+
+  updateExportRecordBadge();
+}
+
+function downloadExportRecord(id) {
+  var rec = state.exportRecords.find(function(r) { return r.id === id; });
+  if (!rec || !rec.blobUrl) {
+    showToast('文件已失效，请重新导出', 'warn');
+    return;
+  }
+  var a = document.createElement('a');
+  a.href = rec.blobUrl;
+  a.download = rec.filename || 'export.xlsx';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  showToast('开始下载：' + (rec.filename || '导出文件'), 'success');
+}
+
+function cleanupExportRecords() {
+  // V37: 释放已完成/失败记录的 blob URL
+  state.exportRecords.forEach(function(r) {
+    if (r.blobUrl && (r.status === 'done' || r.status === 'failed')) {
+      URL.revokeObjectURL(r.blobUrl);
+    }
+  });
+  state.exportRecords = state.exportRecords.filter(function(r) {
+    return r.status === 'processing';
+  });
+  renderExportRecords();
+  updateExportRecordBadge();
+  showToast('已清空已完成/失败的记录', 'info');
+}
+
+function updateExportRecordBadge() {
+  var badge = document.getElementById('exportRecordBadge');
+  var processing = state.exportRecords.filter(function(r) { return r.status === 'processing'; }).length;
+  var done = state.exportRecords.filter(function(r) { return r.status === 'done'; }).length;
+  if (processing > 0) {
+    badge.style.display = 'inline-block';
+    badge.textContent = processing;
+    badge.style.background = '#f59e0b';
+  } else if (done > 0) {
+    badge.style.display = 'inline-block';
+    badge.textContent = done;
+    badge.style.background = 'var(--pri)';
+  } else {
+    badge.style.display = 'none';
+  }
 }
 
 async function exportExcel() {
@@ -3681,7 +3938,7 @@ async function exportExcel() {
         imgCells.forEach(function(cell) { rows[cell.ri][cell.ci] = '[图片:需前往Supabase Dashboard创建product-images Bucket]'; });
       } else {
         showToast('正在上传 ' + imgCells.length + ' 张图片到图床…', 'info');
-        var BATCH = 10;
+        var BATCH = 25; // V37: 提升并发数加速导出
         var uploaded = 0;
         var failCount = 0;
         for (var i = 0; i < imgCells.length; i += BATCH) {
@@ -3716,11 +3973,29 @@ async function exportExcel() {
     XLSX.utils.book_append_sheet(wb, ws, pNames[state.platform] || 'Sheet1');
     var timestamp = new Date().toLocaleDateString('zh-CN').replace(/\//g,'-');
     var filename = pNames[state.platform] + '_批量上架_' + timestamp + '.xlsx';
-    XLSX.writeFile(wb, filename);
-    var steps = document.querySelectorAll('.step');
-    steps[3].classList.add('done');
-    document.getElementById('stepLine3').classList.add('done');
-    showToast('导出成功：' + filename, 'success');
+
+    // V37: 异步导出模式 — 存储到记录
+    var wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    var xlsxBlob = new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    if (_currentExportRecordId) {
+      var rec = state.exportRecords.find(function(r) { return r.id === _currentExportRecordId; });
+      if (rec && xlsxBlob) {
+        rec.blob = xlsxBlob;
+        rec.blobUrl = URL.createObjectURL(xlsxBlob);
+        rec.filename = filename;
+        rec.status = 'done';
+        rec.rowCount = rows.length;
+      }
+      updateExportRecordBadge();
+      renderExportRecordsIfOpen();
+      showToast('导出完成！请在「导出记录」中下载', 'success');
+    } else {
+      XLSX.writeFile(wb, filename);
+      var steps = document.querySelectorAll('.step');
+      steps[3].classList.add('done');
+      document.getElementById('stepLine3').classList.add('done');
+      showToast('导出成功：' + filename, 'success');
+    }
   } catch(e) {
     console.error('Export error:', e);
     showToast('导出失败：' + (e.message || '未知错误'), 'error');
@@ -3807,6 +4082,10 @@ async function clearAllData() {
   state.currentSchemeName = { shopee:'', lazada:'', tiktok:'' };
   state.currentSchemeId = { shopee:null, lazada:null, tiktok:null };
   state.titleSchemes = { shopee:[], lazada:[], tiktok:[] };
+  // V37: 清空导出记录并释放 blob
+  state.exportRecords.forEach(function(r) { if (r.blobUrl) URL.revokeObjectURL(r.blobUrl); });
+  state.exportRecords = [];
+  updateExportRecordBadge();
   state.currentProductIdx = -1;
   localStorage.removeItem('ecom_fallback');
   renderProductList(); renderFieldList(); updateProductBadge();
