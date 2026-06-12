@@ -1276,9 +1276,9 @@ async function loadFromSupabase() {
 async function syncToSupabase() {
   if (!sb) {
     setSyncStatus('offline');
-    try { localStorage.setItem('ecom_fallback', JSON.stringify({
+    safeSetLS('ecom_fallback', JSON.stringify({
       fieldConfigs: state.fieldConfigs, products: state.products, settings: state.settings
-    })); } catch(_) {}
+    }));
     return;
   }
   setSyncStatus('syncing');
@@ -1336,9 +1336,9 @@ async function syncToSupabase() {
   } catch (e) {
     console.error('Supabase sync error:', e);
     setSyncStatus('error');
-    try { localStorage.setItem('ecom_fallback', JSON.stringify({
+    safeSetLS('ecom_fallback', JSON.stringify({
       fieldConfigs: state.fieldConfigs, products: state.products, settings: state.settings
-    })); } catch(_) {}
+    }));
   }
 }
 
@@ -2229,28 +2229,92 @@ function handleDrop(e) {
   handleTemplateImport(input);
 }
 
-// V45: 模板库持久化
-function syncTemplateLibrary() {
+// V48: 安全 localStorage 写入 — 检测 QuotaExceededError，失败时警告用户
+function safeSetLS(key, value, fallbackValue) {
   try {
-    // 为每个模板生成 base64 rawData 用于 localStorage
-    var libForStore = {};
+    localStorage.setItem(key, value);
+    return true;
+  } catch(e) {
+    if (e.name === 'QuotaExceededError' || e.code === 22 || e.toString().indexOf('quota') > -1) {
+      console.warn('⚠️ localStorage 配额溢出:', key, '| 数据大小约:', Math.round(value.length/1024), 'KB');
+      if (fallbackValue !== undefined) {
+        try { localStorage.setItem(key, fallbackValue); } catch(e2) {}
+      }
+      return false;
+    }
+    // 其他错误也记录
+    console.warn('localStorage 写入失败:', key, e.message);
+    return false;
+  }
+}
+
+// V45: 模板库持久化
+// V48: 增加 QuotaExceededError 检测 + Supabase Storage 云端备份
+function syncTemplateLibrary() {
+  // 为每个模板生成 base64 rawData 用于 localStorage
+  var libForStore = {};
+  var libForStoreLight = {}; // 精简版（不含 rawData）
+  var totalRaws = 0;
+  ['shopee', 'lazada', 'tiktok'].forEach(function(plat) {
+    libForStore[plat] = (state.templateLibrary[plat] || []).map(function(tpl) {
+      var rawB64 = tpl.rawData ? arrayBufferToBase64(tpl.rawData) : '';
+      totalRaws += rawB64.length;
+      return {
+        id: tpl.id, name: tpl.name, filename: tpl.filename,
+        sheetNames: tpl.sheetNames, config: tpl.config,
+        extractSheet: tpl.extractSheet, extractRow: tpl.extractRow,
+        fields: tpl.fields, data: tpl.data,
+        rawData_base64: rawB64,
+        createdAt: tpl.createdAt
+      };
+    });
+    libForStoreLight[plat] = (libForStore[plat] || []).map(function(tpl) {
+      return { id: tpl.id, name: tpl.name, filename: tpl.filename,
+        sheetNames: tpl.sheetNames, config: tpl.config,
+        extractSheet: tpl.extractSheet, extractRow: tpl.extractRow,
+        fields: tpl.fields, data: tpl.data, createdAt: tpl.createdAt };
+    });
+  });
+  var fullJson = JSON.stringify(libForStore);
+  var ok = safeSetLS('ecom_template_library', fullJson, JSON.stringify(libForStoreLight));
+  if (!ok) {
+    showToast('⚠️ 本地缓存已满，模板文件仅保留索引（刷新后需联网恢复）', 'warn');
+  }
+  safeSetLS('ecom_active_template', JSON.stringify(state.activeTemplateId));
+
+  // V48: 将模板文件上传到 Supabase Storage 作为云端备份
+  if (sb) {
     ['shopee', 'lazada', 'tiktok'].forEach(function(plat) {
-      libForStore[plat] = (state.templateLibrary[plat] || []).map(function(tpl) {
-        return {
-          id: tpl.id, name: tpl.name, filename: tpl.filename,
-          sheetNames: tpl.sheetNames, config: tpl.config,
-          extractSheet: tpl.extractSheet, extractRow: tpl.extractRow,
-          fields: tpl.fields, data: tpl.data,
-          rawData_base64: tpl.rawData ? arrayBufferToBase64(tpl.rawData) : '',
-          createdAt: tpl.createdAt
-        };
+      (state.templateLibrary[plat] || []).forEach(function(tpl) {
+        if (!tpl.rawData || tpl.rawData.length === 0) return;
+        try {
+          var buf = new Uint8Array(tpl.rawData).buffer;
+          sb.storage.from('ecom-assets').upload('templates/' + plat + '/' + tpl.id + '.xlsx', buf, {
+            contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            upsert: true
+          }).then(function() {
+            console.log('📦 模板已备份到云端:', tpl.id, tpl.name);
+          }).catch(function(err) {
+            console.warn('⚠️ 模板云端备份失败:', tpl.id, err.message);
+          });
+        } catch(e) { console.warn('⚠️ 模板云端备份异常:', tpl.id, e.message); }
       });
     });
-    localStorage.setItem('ecom_template_library', JSON.stringify(libForStore));
-    localStorage.setItem('ecom_active_template', JSON.stringify(state.activeTemplateId));
-  } catch(e) {
-    console.warn('Template library sync failed:', e.message);
   }
+}
+
+// V48: 从 Supabase Storage 下载模板文件的云端备份
+async function loadTemplateRawFromCloud(platform, tplId) {
+  if (!sb) return null;
+  try {
+    var path = 'templates/' + platform + '/' + tplId + '.xlsx';
+    var { data, error } = await sb.storage.from('ecom-assets').download(path);
+    if (error) { console.warn('云端模板下载失败:', path, error.message); return null; }
+    var buf = await data.arrayBuffer();
+    var rawArr = Array.from(new Uint8Array(buf));
+    console.log('📦 从云端恢复模板 rawData:', tplId, '| 大小:', rawArr.length, 'bytes');
+    return rawArr;
+  } catch(e) { console.warn('云端模板下载异常:', tplId, e.message); return null; }
 }
 
 function loadTemplateLibrary() {
@@ -2285,6 +2349,64 @@ function loadTemplateLibrary() {
   } catch(e) {
     console.warn('Template library load failed:', e.message);
   }
+}
+
+// V48: 异步恢复缺失的 rawData（从云端下载）
+async function restoreMissingTemplateRawData() {
+  if (!sb) return;
+  var promises = [];
+  ['shopee', 'lazada', 'tiktok'].forEach(function(plat) {
+    (state.templateLibrary[plat] || []).forEach(function(tpl) {
+      if (!tpl.rawData || tpl.rawData.length === 0) {
+        promises.push(
+          loadTemplateRawFromCloud(plat, tpl.id).then(function(rawArr) {
+            if (rawArr) {
+              tpl.rawData = rawArr;
+              // 同时更新 state.templates
+              if (state.templates[plat] && state.templates[plat].id === tpl.id) {
+                state.templates[plat].rawData = rawArr;
+              }
+            }
+          })
+        );
+      }
+    });
+  });
+  if (promises.length > 0) {
+    showToast('🔄 正在从云端恢复模板文件…', 'info');
+    await Promise.allSettled(promises);
+    // 恢复后重新持久化到 localStorage
+    syncTemplateLibrary();
+    console.log('✅ 模板文件云端恢复完成');
+  }
+}
+
+// V48: 从模板库重建方案的 template_rawdata（localStorage 精简存储后缺失 rawData 时）
+function reconstructSchemeRawDataFromLibrary() {
+  ['shopee', 'lazada', 'tiktok'].forEach(function(plat) {
+    var schemes = state.configSchemes[plat] || [];
+    var lib = state.templateLibrary[plat] || [];
+    var fixedCount = 0;
+    schemes.forEach(function(scheme) {
+      if (scheme.template_rawdata) return; // 已有完整数据，跳过
+      // 通过 template_library_id 查找模板
+      var tpl = null;
+      if (scheme.template_library_id) {
+        tpl = lib.find(function(t) { return t.id === scheme.template_library_id; });
+      }
+      if (!tpl && scheme.template_filename) {
+        tpl = lib.find(function(t) { return t.filename === scheme.template_filename; });
+      }
+      if (tpl && tpl.rawData && tpl.rawData.length > 0) {
+        scheme.template_rawdata = arrayBufferToBase64(tpl.rawData);
+        console.log('📋 从模板库重建方案 rawData:', scheme.scheme_name, '| 模板:', tpl.name);
+        fixedCount++;
+      } else {
+        console.warn('⚠️ 无法为方案重建 rawData（模板未找到）:', scheme.scheme_name, '| template_library_id:', scheme.template_library_id);
+      }
+    });
+    if (fixedCount > 0) console.log('📋 ' + plat + ' 平台修复了 ' + fixedCount + ' 个方案的 rawData');
+  });
 }
 
 function processTemplate(data, filename) {
@@ -2473,7 +2595,12 @@ async function saveFieldConfig() {
         if (error) throw error;
       } catch(e) {
         console.warn('云端更新方案失败，保留本地:', e.message);
-        localStorage.setItem('ecom_schemes_fallback', JSON.stringify(state.configSchemes));
+        // V48: 去掉冗余的 template_rawdata
+        var localSchemes = JSON.parse(JSON.stringify(state.configSchemes));
+        Object.keys(localSchemes).forEach(function(p) {
+          (localSchemes[p] || []).forEach(function(s) { delete s.template_rawdata; });
+        });
+        safeSetLS('ecom_schemes_fallback', JSON.stringify(localSchemes));
       }
     }
   }
@@ -2675,8 +2802,14 @@ async function saveAsScheme() {
     updateCurrentSchemeBadge();
     renderSchemeList();
     document.getElementById('newSchemeName').value = '';
-    // V41: 成功保存后同时备份到 localStorage (双保险)
-    try { localStorage.setItem('ecom_schemes_fallback', JSON.stringify(state.configSchemes)); } catch(lsErr) {}
+    // V48: 保存到 localStorage 时去掉冗余的 template_rawdata（模板文件已通过模板库 + 云端备份持久化）
+    try {
+      var localSchemes = JSON.parse(JSON.stringify(state.configSchemes));
+      Object.keys(localSchemes).forEach(function(p) {
+        (localSchemes[p] || []).forEach(function(s) { delete s.template_rawdata; });
+      });
+      safeSetLS('ecom_schemes_fallback', JSON.stringify(localSchemes));
+    } catch(lsErr) {}
     showToast('方案「' + name + '」已保存（含模板文件）', 'success');
   } catch(e) {
     console.error('Save scheme error:', e);
@@ -2691,7 +2824,12 @@ async function saveAsScheme() {
     updateCurrentSchemeBadge();
     renderSchemeList();
     document.getElementById('newSchemeName').value = '';
-    localStorage.setItem('ecom_schemes_fallback', JSON.stringify(state.configSchemes));
+    // V48: 去掉冗余的 template_rawdata
+    var localSchemes = JSON.parse(JSON.stringify(state.configSchemes));
+    Object.keys(localSchemes).forEach(function(p) {
+      (localSchemes[p] || []).forEach(function(s) { delete s.template_rawdata; });
+    });
+    safeSetLS('ecom_schemes_fallback', JSON.stringify(localSchemes));
     showToast('方案已本地保存（含模板文件，云端暂不可用）', 'warn');
   }
 }
@@ -2905,7 +3043,7 @@ async function saveTitleScheme() {
     scheme.id = Date.now() + Math.random();
     if (!state.titleSchemes[platform]) state.titleSchemes[platform] = [];
     state.titleSchemes[platform].push(scheme);
-    localStorage.setItem('ecom_title_schemes_fallback', JSON.stringify(state.titleSchemes));
+    safeSetLS('ecom_title_schemes_fallback', JSON.stringify(state.titleSchemes));
     showToast('标题方案已本地保存（云端暂不可用）', 'warn');
     document.getElementById('newTitleSchemeName').value = '';
     renderTitleSchemeList();
@@ -2914,6 +3052,7 @@ async function saveTitleScheme() {
 
   if (!state.titleSchemes[platform]) state.titleSchemes[platform] = [];
   state.titleSchemes[platform].push(scheme);
+  safeSetLS('ecom_title_schemes_fallback', JSON.stringify(state.titleSchemes));
   document.getElementById('newTitleSchemeName').value = '';
   renderTitleSchemeList();
   showToast('标题方案「' + name + '」已保存', 'success');
@@ -2985,7 +3124,7 @@ async function deleteTitleSchemeById(id) {
     await sb.from('ecom_title_schemes').delete().eq('id', id);
   } catch(e) { console.warn('云端删除标题方案失败:', e.message); }
   schemes.splice(idx, 1);
-  localStorage.setItem('ecom_title_schemes_fallback', JSON.stringify(state.titleSchemes));
+  safeSetLS('ecom_title_schemes_fallback', JSON.stringify(state.titleSchemes));
   renderTitleSchemeList();
   showToast('标题方案「' + name + '」已删除', 'success');
 }
@@ -3787,10 +3926,10 @@ function saveCurrentProduct() {
   }
   
   // 先本地保存到 localStorage（瞬时），然后后台同步到云端
-  try { localStorage.setItem('ecom_fallback', JSON.stringify({
+  safeSetLS('ecom_fallback', JSON.stringify({
     fieldConfigs: state.fieldConfigs, products: state.products, settings: state.settings,
     previewSynced: state.previewSynced
-  })); } catch(_) {}
+  }));
   // V33: 保存后自动同步到导出预览
   refreshPreview();
   showToast('产品组信息已保存，已同步到导出预览', 'success');
@@ -7847,6 +7986,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   showToast(sb ? '正在从云端加载数据…' : '云端未连接，使用离线模式', 'info');
   await loadDraft();
   restoreTemplateFromLocalStorage();
+  // V48: 异步从云端恢复缺失的模板 rawData（localStorage 满时降级存储不含文件）
+  await restoreMissingTemplateRawData();
+  // V48: 从已恢复的模板库重建方案的 template_rawdata
+  reconstructSchemeRawDataFromLibrary();
   loadTitlePartDefs();
   document.querySelectorAll('.toast').forEach(t => t.remove());
   // 设置去水印页面的拖拽上传
