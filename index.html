@@ -666,15 +666,15 @@
         <h2 style="font-size:1.1rem;font-weight:700">产品信息填写</h2>
         <span id="productPlatformBadge" class="badge-pill badge-shopee">Shopee</span>
         <div class="ml-auto flex gap8">
-          <button class="btn btn-outline btn-sm" onclick="addNewProduct()">+ 新增产品</button>
-          <button class="btn btn-primary btn-sm" onclick="saveCurrentProduct()">保存当前产品</button>
+          <button class="btn btn-outline btn-sm" onclick="addNewProduct()">+ 新增产品组</button>
+          <button class="btn btn-primary btn-sm" onclick="saveCurrentProduct()">保存当前产品组</button>
         </div>
       </div>
       <div class="flex gap12" style="align-items:flex-start">
         <div style="width:220px;flex-shrink:0">
           <div class="card">
             <div class="card-header" style="padding:12px">
-              <div class="card-title" style="font-size:.88rem">产品列表</div>
+              <div class="card-title" style="font-size:.88rem">产品组列表</div>
               <div class="ml-auto"><span id="productCount" class="text-sm text-muted">0 个</span></div>
             </div>
             <div class="card-body" style="padding:8px">
@@ -688,9 +688,9 @@
           <div id="productFormWrap">
             <div class="empty-state">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
-              <h3>点击新增产品开始填写</h3>
+              <h3>点击新增产品组开始填写</h3>
               <p>请先在「字段配置」中完成配置</p>
-              <button class="btn btn-primary" style="margin-top:12px" onclick="addNewProduct()">+ 新增第一个产品</button>
+              <button class="btn btn-primary" style="margin-top:12px" onclick="addNewProduct()">+ 新增一组产品</button>
             </div>
           </div>
         </div>
@@ -708,7 +708,7 @@
               <input type="checkbox" id="previewSelectAll" onchange="togglePreviewSelectAll()" /> 全选
             </label>
             <span id="previewSelectedCount" style="color:var(--pri);font-weight:600">0</span> 个已选
-            <button class="btn btn-primary btn-sm" onclick="exportSelectedProducts()">📤 导出选中产品</button>
+            <button class="btn btn-primary btn-sm" onclick="exportSelectedProducts()">📤 导出选中产品组</button>
           </span>
           <button class="btn btn-outline btn-sm" onclick="refreshPreview()">刷新预览</button>
           <button class="btn btn-success" onclick="startAsyncExport()">
@@ -734,8 +734,8 @@
               <input type="checkbox" id="previewSelectAllCb" onchange="togglePreviewSelectAllCb()" /> 全选产品
             </label>
             <span id="previewSelCount" style="color:var(--pri);font-weight:600;font-size:.82rem">已选 0 个</span>
-            <button class="btn btn-primary btn-sm" onclick="exportSelectedProducts()" id="exportSelectedBtn">📤 导出选中产品</button>
-            <span style="font-size:.75rem;color:var(--muted)">（仅导出选中产品，同一配置方案）</span>
+            <button class="btn btn-primary btn-sm" onclick="exportSelectedProducts()" id="exportSelectedBtn">📤 导出选中产品组</button>
+            <span style="font-size:.75rem;color:var(--muted)">（仅导出选中产品组，同一配置方案）</span>
           </div>
           <div id="previewProductCheckboxes" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;max-height:120px;overflow-y:auto"></div>
         </div>
@@ -1004,7 +1004,7 @@
           <div class="modal-title">📋 选择配置方案</div>
           <button class="modal-close" onclick="closeSchemeSelector()">×</button>
         </div>
-        <p class="text-sm text-muted" style="margin-bottom:12px">请先选择一个字段配置方案，才能开始填写产品信息。</p>
+        <p class="text-sm text-muted" style="margin-bottom:12px">请先选择一个字段配置方案，才能开始填写产品组信息。</p>
         <div id="schemeSelectorList" class="scheme-list scheme-selector" style="max-height:300px;overflow-y:auto"></div>
         <div style="margin-top:16px;display:flex;gap:8px;justify-content:center">
           <button class="btn btn-outline btn-sm" onclick="closeSchemeSelector()">取消</button>
@@ -1161,7 +1161,7 @@ const MAX_IMG_PER_GROUP = 9;
 // =============================================
 // Supabase 初始化（容错：CDN 加载失败不影响核心功能）
 // =============================================
-console.log('🛠 批量上架工具 V46 | 2026-06-12 | 预览空状态 + 清空/切换刷新 | Telea FMM | JSZip');
+console.log('🛠 批量上架工具 V47 | 2026-06-12 | 产品→产品组重构 | 预览同步跟踪 | 从预览移除 | Telea FMM | JSZip');
 // =============================================
 const SUPABASE_URL = 'https://khrppyhcjzkkokyhnhhd.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtocnBweWhjanpra29reWhuaGhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwNzY1NDEsImV4cCI6MjA5NjY1MjU0MX0.uS9YablBNwjUmQlwRbLRw3SEPNgEnO1Uc6Poe1SeB88';
@@ -1420,6 +1420,7 @@ const state = {
   titleSchemes: { shopee: [], lazada: [], tiktok: [] },
   templateLibrary: { shopee: [], lazada: [], tiktok: [] },  // V45: 多模板库
   activeTemplateId: { shopee: '', lazada: '', tiktok: '' }, // V45: 当前选中的模板ID
+  previewSynced: { shopee: [], lazada: [], tiktok: [] },  // V47: 已同步到预览的产品组 ID 列表
   exportRecords: [],      // V37: 导出记录 [{ id, timestamp, filename, status, blob, sheetCount, rowCount, error }]
   currentProductIdx: -1,
   settings: { maxTitleLen: 120, genCount: 5, titleSep: ' ',
@@ -3083,7 +3084,7 @@ function addNewProduct() {
 function _doAddNewProduct() {
   const newProduct = {
     id: Date.now(),
-    name: '新产品 ' + (state.products[state.platform].length + 1),
+    name: '产品组 ' + (state.products[state.platform].length + 1),
     images: [],        // [{groupId, groupName, files:[{dataUrl, name}]}]
     fixedDetailImages: [], // [{dataUrl, name}] 固定细节图（上限5张，所有链接共用）
     sizeChart: null,   // dataUrl
@@ -3100,7 +3101,7 @@ function _doAddNewProduct() {
   renderProductList();
   renderProductForm(state.currentProductIdx);
   updateProductBadge();
-  showToast('新产品已创建，请填写信息', 'success');
+  showToast('产品组已创建，请填写信息', 'success');
 }
 
 function renderProductList() {
@@ -3108,7 +3109,7 @@ function renderProductList() {
   const products = state.products[state.platform];
   document.getElementById('productCount').textContent = products.length + ' 个';
   if (products.length === 0) {
-    list.innerHTML = '<div class="empty-state" style="padding:30px 10px"><p style="font-size:.78rem">暂无产品</p></div>';
+    list.innerHTML = '<div class="empty-state" style="padding:30px 10px"><p style="font-size:.78rem">暂无产品组</p></div>';
     return;
   }
   list.innerHTML = products.map((p, i) => {
@@ -3134,13 +3135,20 @@ function selectProduct(idx) {
 }
 
 function deleteProduct(idx) {
-  if (!confirm('确认删除该产品？')) return;
-  state.products[state.platform].splice(idx, 1);
-  if (state.currentProductIdx >= state.products[state.platform].length)
-    state.currentProductIdx = state.products[state.platform].length - 1;
+  if (!confirm('确认删除该产品组？')) return;
+  var platform = state.platform;
+  // V47: 删除产品组时同步从预览集合中移除
+  var productId = state.products[platform][idx].id;
+  var synced = state.previewSynced[platform] || [];
+  var si = synced.indexOf(productId);
+  if (si !== -1) synced.splice(si, 1);
+  
+  state.products[platform].splice(idx, 1);
+  if (state.currentProductIdx >= state.products[platform].length)
+    state.currentProductIdx = state.products[platform].length - 1;
   renderProductList();
   if (state.currentProductIdx >= 0) renderProductForm(state.currentProductIdx);
-  else document.getElementById('productFormWrap').innerHTML = '<div class="empty-state"><p>请新增产品</p></div>';
+  else document.getElementById('productFormWrap').innerHTML = '<div class="empty-state"><p>请新增产品组</p></div>';
   updateProductBadge();
   refreshPreview(); // V46: 同步更新导出预览
   debouncedSync();
@@ -3764,14 +3772,28 @@ function duplicateProduct(idx) {
 }
 
 function saveCurrentProduct() {
+  var platform = state.platform;
+  var idx = state.currentProductIdx;
+  if (idx < 0 || idx >= state.products[platform].length) {
+    showToast('请先选择一个产品组', 'warn'); return;
+  }
   renderProductList(); updateProductBadge();
+  
+  // V47: 标记当前产品组已同步到预览
+  var productId = state.products[platform][idx].id;
+  var synced = state.previewSynced[platform];
+  if (synced.indexOf(productId) === -1) {
+    synced.push(productId);
+  }
+  
   // 先本地保存到 localStorage（瞬时），然后后台同步到云端
   try { localStorage.setItem('ecom_fallback', JSON.stringify({
-    fieldConfigs: state.fieldConfigs, products: state.products, settings: state.settings
+    fieldConfigs: state.fieldConfigs, products: state.products, settings: state.settings,
+    previewSynced: state.previewSynced
   })); } catch(_) {}
   // V33: 保存后自动同步到导出预览
   refreshPreview();
-  showToast('产品信息已保存，已同步到导出预览', 'success');
+  showToast('产品组信息已保存，已同步到导出预览', 'success');
   // 后台异步同步，不阻塞 UI
   debouncedSync();
 }
@@ -4035,39 +4057,61 @@ function buildExportData(includeTemplate, optFields, optProducts) {
 
 
 // =============================================
-// V43: 导出预览 — 产品多选导出
+// V43/V47: 导出预览 — 产品组多选导出 + 从预览移除
 // =============================================
-// state.previewSelectedProducts = Set of product indices (在 refreshPreview 中初始化)
-function renderPreviewProductCheckboxes() {
-  var products = state.products[state.platform] || [];
+// state.previewSelectedProducts = Set of product IDs (在 refreshPreview 中初始化)
+function renderPreviewProductCheckboxes(syncedProducts) {
+  var platform = state.platform;
+  if (!syncedProducts) syncedProducts = state.products[platform] || [];
   var panel = document.getElementById('previewProductSelectPanel');
   var container = document.getElementById('previewProductCheckboxes');
   var selCount = document.getElementById('previewSelCount');
   
-  if (products.length === 0) {
+  if (!syncedProducts || syncedProducts.length === 0) {
     panel.style.display = 'none';
     return;
   }
   panel.style.display = 'block';
   state.previewSelectedProducts = new Set();
   
-  container.innerHTML = products.map(function(p, i) {
+  container.innerHTML = syncedProducts.map(function(p, i) {
     var schemeBadge = p.configSchemeName ? ' 📋' + p.configSchemeName : '';
-    return '<label style="cursor:pointer;display:inline-flex;align-items:center;gap:3px;font-size:.78rem;padding:2px 6px;border:1px solid var(--border);border-radius:4px;background:#fff;white-space:nowrap" data-pidx="' + i + '">' +
-      '<input type="checkbox" class="preview-prod-cb" data-pidx="' + i + '" onchange="onPreviewProductToggle()" /> ' +
-      escHtml(p.name || '产品' + (i+1)) + schemeBadge +
-      '</label>';
+    return '<div style="display:inline-flex;align-items:center;gap:2px;border:1px solid var(--border);border-radius:4px;background:#fff;white-space:nowrap;padding:0 4px 0 0">' +
+      '<label style="cursor:pointer;display:inline-flex;align-items:center;gap:3px;font-size:.78rem;padding:2px 4px" data-pid="' + p.id + '">' +
+        '<input type="checkbox" class="preview-prod-cb" data-pid="' + p.id + '" onchange="onPreviewProductToggle()" /> ' +
+        escHtml(p.name || '产品组' + (i+1)) + schemeBadge +
+      '</label>' +
+      '<span onclick="removeFromPreview(' + p.id + ')" title="从预览移除（仍保留在产品信息中）" style="cursor:pointer;color:var(--muted);font-size:1rem;padding:0 4px;line-height:1;border-radius:2px" onmouseover="this.style.color=\'var(--danger)\';this.style.background=\'#fff0f0\'" onmouseout="this.style.color=\'var(--muted)\';this.style.background=\'transparent\'">×</span>' +
+      '</div>';
   }).join('');
   
   selCount.textContent = '已选 0 个';
   document.getElementById('previewSelectAllCb').checked = false;
+  updatePreviewSelectionUI();
+}
+
+// V47: 从预览移除产品组（不删除产品信息中的产品组，保存后可重新同步回来）
+function removeFromPreview(productId) {
+  var platform = state.platform;
+  var synced = state.previewSynced[platform] || [];
+  var idx = synced.indexOf(productId);
+  if (idx !== -1) {
+    synced.splice(idx, 1);
+  }
+  // 从选中集合中移除
+  if (state.previewSelectedProducts) {
+    state.previewSelectedProducts.delete(productId);
+  }
+  // 刷新预览
+  refreshPreview();
+  showToast('已从预览移除，返回产品组页面点击保存可重新同步', 'info');
 }
 
 function onPreviewProductToggle() {
   var cbs = document.querySelectorAll('.preview-prod-cb');
   state.previewSelectedProducts = new Set();
   cbs.forEach(function(cb) {
-    if (cb.checked) state.previewSelectedProducts.add(parseInt(cb.dataset.pidx));
+    if (cb.checked) state.previewSelectedProducts.add(Number(cb.dataset.pid));
   });
   updatePreviewSelectionUI();
 }
@@ -4099,28 +4143,33 @@ function updatePreviewSelectionUI() {
   if (toolbarBar) toolbarBar.style.display = count > 0 ? 'flex' : 'none';
 }
 
-// 导出选中的产品
+// 导出选中的产品组
 async function exportSelectedProducts() {
   var platform = state.platform;
   var products = state.products[platform];
-  if (!products.length) { showToast('没有产品', 'warn'); return; }
+  if (!products.length) { showToast('没有产品组', 'warn'); return; }
   
-  var selectedIndices = Array.from(state.previewSelectedProducts || []);
-  if (selectedIndices.length === 0) { showToast('请先选择要导出的产品', 'warn'); return; }
+  var selectedIds = Array.from(state.previewSelectedProducts || []);
+  if (selectedIds.length === 0) { showToast('请先选择要导出的产品组', 'warn'); return; }
+  
+  // V47: 通过 ID 查找产品组（而非数组索引）
+  var selectedProducts = selectedIds.map(function(id) {
+    return products.find(function(p) { return p.id === id; });
+  }).filter(Boolean);
+  if (selectedProducts.length === 0) { showToast('未找到选中的产品组', 'warn'); return; }
   
   // V43: 必须同一配置方案
-  var selectedProducts = selectedIndices.map(function(i) { return products[i]; });
   var schemeIds = new Set();
   selectedProducts.forEach(function(p) {
     if (p.configSchemeId) schemeIds.add(p.configSchemeId);
   });
   if (schemeIds.size > 1) {
-    showToast('所选产品必须属于同一配置方案，请重新选择', 'error');
+    showToast('所选产品组必须属于同一配置方案，请重新选择', 'error');
     return;
   }
   
   var tpl = resolveExportTemplate(platform);
-  var confirmMsg = '即将仅导出 ' + selectedProducts.length + ' 个选中产品';
+  var confirmMsg = '即将仅导出 ' + selectedProducts.length + ' 个选中产品组';
   if (tpl && tpl.filename) {
     confirmMsg += '，使用模板【' + tpl.filename + '】';
   }
@@ -4155,7 +4204,7 @@ async function _exportWithProducts(filteredProducts) {
   renderExportRecordsIfOpen();
   _currentExportRecordId = record.id;
   
-  showToast('导出任务已开始（' + filteredProducts.length + ' 个产品）…', 'info');
+  showToast('导出任务已开始（' + filteredProducts.length + ' 个产品组）…', 'info');
   
   setTimeout(async function() {
     try {
@@ -4274,8 +4323,9 @@ async function _exportWithProducts(filteredProducts) {
 // 导出预览（先渲染文本表格，再逐批加载缩略图，流畅不卡）
 // =============================================
 async function refreshPreview() {
-  var fields = state.fieldConfigs[state.platform];
-  var products = state.products[state.platform];
+  var platform = state.platform;
+  var fields = state.fieldConfigs[platform];
+  var allProducts = state.products[platform];
   var container = document.getElementById('exportPreviewTable');
   
   // V46: 防御 — 容器不存在时直接返回（页面未加载到预览tab时跳过，避免 TypeError）
@@ -4285,19 +4335,25 @@ async function refreshPreview() {
   container.innerHTML = '<div class="empty-state" style="padding:20px"><p>⏳ 加载中…</p></div>';
   document.getElementById('previewInfo').textContent = '—';
   
-  // V43: 渲染产品选择面板
-  renderPreviewProductCheckboxes();
+  // V47: 只获取已同步到预览的产品组（按 synced ID 过滤）
+  var syncedIds = state.previewSynced[platform] || [];
+  var syncedProducts = allProducts.filter(function(p) {
+    return syncedIds.indexOf(p.id) !== -1;
+  });
   
-  if (!fields || !fields.length || !products.length) {
-    container.innerHTML = '<div class="empty-state" style="padding:40px"><p>请先完成字段配置并填写产品信息</p></div>';
-    document.getElementById('previewInfo').textContent = '共 0 个产品';
+  // V43: 渲染产品选择面板（仅显示已同步的产品组）
+  renderPreviewProductCheckboxes(syncedProducts);
+  
+  if (!fields || !fields.length || !syncedProducts.length) {
+    container.innerHTML = '<div class="empty-state" style="padding:40px"><p>请先在产品信息板块保存产品组</p></div>';
+    document.getElementById('previewInfo').textContent = '共 0 个产品组';
     return;
   }
   try {
     container.innerHTML = '<div class="empty-state" style="padding:20px"><p>⏳ 正在生成预览…</p></div>';
     await new Promise(function(r){ setTimeout(r, 30); });
 
-    var result = buildExportData(true); // 预览需要包含模板行
+    var result = buildExportData(true, null, syncedProducts); // V47: 仅导出已同步的产品组
     var rows = result.rows;
     var linkStarts = result.linkStarts;
     var templateRowCount = result.templateRowCount;
@@ -4309,11 +4365,11 @@ async function refreshPreview() {
     } else {
       dataStartIdx = templateRowCount; // 无字段名行，数据从模板行之后开始
     }
-    var totalLinks = products.reduce(function(s,p){ return s + Math.max(1, p.images.length); }, 0);
+    var totalLinks = syncedProducts.reduce(function(s,p){ return s + Math.max(1, p.images.length); }, 0);
     var dataRowCount = rows.length - dataStartIdx;
     var colCount = rows[0] ? rows[0].length : 0;
 
-    var info = '共 ' + products.length + ' 个产品，' + totalLinks + ' 个链接，' + dataRowCount + ' 行数据，' + colCount + ' 列';
+    var info = '共 ' + syncedProducts.length + ' 个产品组，' + totalLinks + ' 个链接，' + dataRowCount + ' 行数据，' + colCount + ' 列';
     if (templateRowCount > 0) info += '（以模板第' + (templateRowCount >= 3 ? '3' : '' + templateRowCount) + '行为表头）';
     document.getElementById('previewInfo').textContent = info;
 
@@ -4734,25 +4790,32 @@ async function exportExcelWithTemplateFallback() {
 var _currentExportRecordId = null;
 
 async function startAsyncExport() {
-  var fields = state.fieldConfigs[state.platform];
-  var products = state.products[state.platform];
+  var platform = state.platform;
+  var fields = state.fieldConfigs[platform];
+  var allProducts = state.products[platform];
+  
+  // V47: 导出全部 = 导出所有已同步到预览的产品组
+  var syncedIds = state.previewSynced[platform] || [];
+  var products = allProducts.filter(function(p) {
+    return syncedIds.indexOf(p.id) !== -1;
+  });
+  
   if (!fields || !fields.length) { showToast('请先导入并配置字段', 'warn'); return; }
-  if (!products.length) { showToast('请先添加产品信息', 'warn'); return; }
+  if (!products.length) { showToast('请先在产品信息中保存产品组以同步到预览', 'warn'); return; }
 
   // V43: 导出前验证模板一致性 — 弹出确认对话框
   // 解决模板不匹配的根源：导出前强制用户确认使用的模板文件
-  var platform = state.platform;
   var tpl = resolveExportTemplate(platform);
-  var confirmMsg = '确认导出 ' + products.length + ' 个产品？';
+  var confirmMsg = '确认导出 ' + products.length + ' 个产品组？';
   if (tpl && tpl.filename) {
-    confirmMsg = '即将使用模板【' + tpl.filename + '】导出 ' + products.length + ' 个产品。\n\n';
+    confirmMsg = '即将使用模板【' + tpl.filename + '】导出 ' + products.length + ' 个产品组。\n\n';
     if (tpl.config && tpl.config.sheetName) {
       confirmMsg += '写入Sheet：「' + tpl.config.sheetName + '」，起始行：第' + (tpl.config.dataStartRow || 6) + '行\n\n';
     }
     confirmMsg += '确认继续导出吗？';
     if (!confirm(confirmMsg)) return;
   } else if (tpl && tpl.rawData) {
-    if (!confirm('模板文件存在但无名称信息，导出 ' + products.length + ' 个产品？')) return;
+    if (!confirm('模板文件存在但无名称信息，导出 ' + products.length + ' 个产品组？')) return;
   }
 
   // V37: 防重复提交 — 已有处理中的任务
@@ -4848,7 +4911,7 @@ function renderExportRecords() {
     var timeStr = r.timestamp;
     var metaParts = [];
     if (r.platform) metaParts.push({ shopee: 'Shopee', lazada: 'Lazada', tiktok: 'TikTok' }[r.platform] || r.platform);
-    if (r.productCount) metaParts.push(r.productCount + ' 个产品');
+    if (r.productCount) metaParts.push(r.productCount + ' 个产品组');
     if (r.rowCount) metaParts.push(r.rowCount + ' 行数据');
     if (r.sheetCount) metaParts.push(r.sheetCount + ' 个Sheet');
     var metaStr = metaParts.join(' · ');
@@ -5068,7 +5131,7 @@ async function exportExcel() {
     var fields = state.fieldConfigs[state.platform];
     var products = state.products[state.platform];
     if (!fields || !fields.length) { showToast('请先导入并配置字段', 'warn'); return; }
-    if (!products.length) { showToast('请先添加产品信息', 'warn'); return; }
+    if (!products.length) { showToast('请先添加产品组信息', 'warn'); return; }
     if (typeof XLSX === 'undefined') { showToast('Excel 组件加载失败，请刷新页面', 'error'); return; }
 
     showToast('正在生成导出数据…', 'info');
@@ -5182,6 +5245,7 @@ async function loadDraft() {
         if (data.fieldConfigs) state.fieldConfigs = data.fieldConfigs;
         if (data.products) state.products = data.products;
         if (data.settings) state.settings = data.settings;
+        if (data.previewSynced) state.previewSynced = data.previewSynced; // V47
         showToast('已从本地缓存恢复（云端暂不可用）', 'warn');
       }
     } catch(_) {}
@@ -5265,6 +5329,14 @@ async function loadDraft() {
     state.currentProductIdx = 0;
     renderProductForm(0);
   }
+  // V47: 向后兼容 — 旧草稿无 previewSynced 时，将所有现有产品标记为已同步
+  ['shopee','lazada','tiktok'].forEach(function(p) {
+    var synced = state.previewSynced[p] || [];
+    if (synced.length === 0 && state.products[p] && state.products[p].length > 0) {
+      state.previewSynced[p] = state.products[p].map(function(pr) { return pr.id; });
+      console.log('🔄 V47 迁移: ' + p + ' 平台 ' + state.previewSynced[p].length + ' 个产品组已标记为同步');
+    }
+  });
 }
 
 // =============================================
@@ -5293,6 +5365,7 @@ async function clearAllData() {
   state.currentSchemeName = { shopee:'', lazada:'', tiktok:'' };
   state.currentSchemeId = { shopee:null, lazada:null, tiktok:null };
   state.titleSchemes = { shopee:[], lazada:[], tiktok:[] };
+  state.previewSynced = { shopee:[], lazada:[], tiktok:[] }; // V47
   // V37: 清空导出记录并释放 blob
   state.exportRecords.forEach(function(r) { if (r.blobUrl) URL.revokeObjectURL(r.blobUrl); });
   state.exportRecords = [];
@@ -5310,7 +5383,7 @@ async function clearAllData() {
   renderTemplateLibrary();
   updateTemplateSelector();
   document.getElementById('importedFileName').textContent = '';
-  document.getElementById('productFormWrap').innerHTML = '<div class="empty-state"><p>请新增产品</p></div>';
+  document.getElementById('productFormWrap').innerHTML = '<div class="empty-state"><p>请新增产品组</p></div>';
   refreshPreview(); // V46: 同步清空导出预览
   showToast('所有数据已从云端清空', 'success');
 }
