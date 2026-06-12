@@ -1542,15 +1542,18 @@ function switchPlatform(platform, btn) {
   
   if (activeTpl) {
     state.templates[platform] = activeTpl;
-    fc.style.display = 'block';
-    document.getElementById('fieldConfigArea').style.display = 'block';
+    if (fc) fc.style.display = 'block';
+    var faEl2 = document.getElementById('fieldConfigArea');
+    if (faEl2) faEl2.style.display = 'block';
   } else if (lib.length > 0) {
     // 有模板但未选中
-    fc.style.display = 'block';
-    document.getElementById('fieldConfigArea').style.display = 'none';
+    if (fc) fc.style.display = 'block';
+    var faEl3 = document.getElementById('fieldConfigArea');
+    if (faEl3) faEl3.style.display = 'none';
   } else {
-    fc.style.display = 'none';
-    document.getElementById('fieldConfigArea').style.display = 'none';
+    if (fc) fc.style.display = 'none';
+    var faEl4 = document.getElementById('fieldConfigArea');
+    if (faEl4) faEl4.style.display = 'none';
   }
   document.getElementById('importedFileName').textContent = '';
   
@@ -1873,8 +1876,9 @@ function onActiveTemplateChange() {
   if (!id) {
     if (infoEl) infoEl.textContent = '请先在模板库中选择一个模板';
     if (configArea) configArea.style.display = 'none';
-    fc.style.display = 'none';
-    document.getElementById('fieldList').innerHTML = '';
+    if (fc) fc.style.display = 'none';
+    var flEl = document.getElementById('fieldList');
+    if (flEl) flEl.innerHTML = '';
     return;
   }
   
@@ -1900,7 +1904,7 @@ function onActiveTemplateChange() {
     ? '提取参考：' + tpl.extractSheet + '第' + tpl.extractRow + '行 | 写入：' + tpl.config.sheetName + '第' + tpl.config.dataStartRow + '行'
     : '';
   
-  fc.style.display = 'block';
+  if (fc) fc.style.display = 'block';
   if (configArea) configArea.style.display = 'block';
   
   // 加载字段配置：优先方案配置，否则模板字段
@@ -2311,6 +2315,7 @@ function processTemplate(data, filename) {
 function renderFieldList() {
   const fields = state.fieldConfigs[state.platform];
   const tbody = document.getElementById('fieldList');
+  if (!tbody) return;  // V45 hotfix: 非字段配置页面跳过
   if (!fields || fields.length === 0) { tbody.innerHTML = ''; return; }
 
   tbody.innerHTML = fields.map((f, i) => `
@@ -2723,11 +2728,16 @@ function loadSchemeById(id) {
   updateTemplateSelector();
   updateCurrentSchemeBadge();
   renderFieldList();
-  document.getElementById('fieldConfigCard').style.display = 'block';
-  document.getElementById('fieldConfigArea').style.display = 'block';
-  document.getElementById('importedFileName').textContent = '✓ ' + (scheme.template_filename || '方案模板')
+  // V45 hotfix: 以下 DOM 操作仅在字段配置页可用（方案选择器可能在任意页面调用）
+  var fcEl = document.getElementById('fieldConfigCard');
+  if (fcEl) fcEl.style.display = 'block';
+  var faEl = document.getElementById('fieldConfigArea');
+  if (faEl) faEl.style.display = 'block';
+  var fnEl = document.getElementById('importedFileName');
+  if (fnEl) fnEl.textContent = '✓ ' + (scheme.template_filename || '方案模板')
     + (rawDataBase64 ? ' 📎含模板' : '');
-  closeSchemeManager();
+  var smEl = document.getElementById('schemeManagerModal');
+  if (smEl) closeSchemeManager();
   showToast('已加载方案「' + scheme.scheme_name + '」' + (rawDataBase64 ? '（含模板文件）' : ''), 'success');
 }
 
@@ -2753,6 +2763,7 @@ async function deleteSchemeById(id) {
 
 function updateCurrentSchemeBadge() {
   const badge = document.getElementById('currentSchemeBadge');
+  if (!badge) return;  // V45 hotfix: 非字段配置页面跳过
   const name = state.currentSchemeName[state.platform];
   if (name) {
     badge.style.display = 'inline-flex';
