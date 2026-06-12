@@ -3139,6 +3139,7 @@ function deleteProduct(idx) {
   if (state.currentProductIdx >= 0) renderProductForm(state.currentProductIdx);
   else document.getElementById('productFormWrap').innerHTML = '<div class="empty-state"><p>请新增产品</p></div>';
   updateProductBadge();
+  refreshPreview(); // V46: 同步更新导出预览
   debouncedSync();
 }
 
