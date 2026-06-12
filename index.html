@@ -1154,7 +1154,7 @@ const MAX_IMG_PER_GROUP = 9;
 // =============================================
 // Supabase 初始化（容错：CDN 加载失败不影响核心功能）
 // =============================================
-console.log('🛠 批量上架工具 V44 | 2026-06-12 | 图片+LOGO板块 + 图片裁剪更名 | Telea FMM | JSZip');
+console.log('🛠 批量上架工具 V46 | 2026-06-12 | 图片+LOGO导出修复(显示元数据持久化) | 字段配置多模板 | Telea FMM | JSZip');
 // =============================================
 const SUPABASE_URL = 'https://khrppyhcjzkkokyhnhhd.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtocnBweWhjanpra29reWhuaGhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwNzY1NDEsImV4cCI6MjA5NjY1MjU0MX0.uS9YablBNwjUmQlwRbLRw3SEPNgEnO1Uc6Poe1SeB88';
@@ -7224,6 +7224,11 @@ function initLogoPosition(bgItem, cardW, cardH) {
   bgItem.logoW = logoW;
   bgItem.logoH = logoH;
   bgItem.logoR = 0;
+  // V46: 存储显示元数据，供导出时使用（不再依赖 DOM 测量）
+  bgItem.displayW = renderW;
+  bgItem.displayH = renderH;
+  bgItem.displayOffsetX = imgOffsetX;
+  bgItem.displayOffsetY = imgOffsetY;
 }
 
 function renderLoGrid() {
@@ -7269,9 +7274,22 @@ function onLoCardLoad(idx, imgEl) {
   var cardH = card.clientHeight;
   var bgItem = loState.bgImages[idx];
   if (!bgItem) return;
-  // 如果已有 LOGO 尺寸（从同步来的），保留
+  // V46: 防止卡片未布局时（cardW=0）错误初始化
+  if (cardW === 0 || cardH === 0) {
+    requestAnimationFrame(function() { onLoCardLoad(idx, imgEl); });
+    return;
+  }
+  // 如果已有 LOGO 尺寸（从同步来的），保留；否则初始化
   if (bgItem.logoW === 0 && bgItem.logoH === 0) {
     initLogoPosition(bgItem, cardW, cardH);
+  } else if (bgItem.displayW === undefined) {
+    // V46: 已有 logoW/logoH 但缺少 display 元数据（从旧版本迁移），补录
+    var bgW2 = bgItem.img.width, bgH2 = bgItem.img.height;
+    var s2 = Math.min(cardW / bgW2, cardH / bgH2);
+    bgItem.displayW = bgW2 * s2;
+    bgItem.displayH = bgH2 * s2;
+    bgItem.displayOffsetX = (cardW - bgItem.displayW) / 2;
+    bgItem.displayOffsetY = (cardH - bgItem.displayH) / 2;
   }
   // 显示并定位 LOGO
   updateLoOverlayPos(idx);
@@ -7458,6 +7476,13 @@ function syncLogoToAll(srcIdx) {
     item.logoW = relW * rect.w;
     item.logoH = relH * rect.h;
     item.logoR = src.logoR;
+    // V46: 同步时补录显示元数据
+    if (item.displayW === undefined) {
+      item.displayW = rect.w;
+      item.displayH = rect.h;
+      item.displayOffsetX = rect.left;
+      item.displayOffsetY = rect.top;
+    }
     updateLoOverlayPos(i);
   });
 }
@@ -7474,6 +7499,7 @@ function toggleLoSync() {
 function renderLoResult(idx) {
   return new Promise(function(resolve, reject) {
     var bgItem = loState.bgImages[idx];
+    if (!bgItem) { resolve(null); return; }
     var canvas = document.createElement('canvas');
     canvas.width = bgItem.img.width;
     canvas.height = bgItem.img.height;
@@ -7482,36 +7508,47 @@ function renderLoResult(idx) {
     // 绘制底图
     ctx.drawImage(bgItem.img, 0, 0);
 
-    // 计算 LOGO 在底图原始坐标系中的位置
-    var card = document.getElementById('loCard_' + idx);
-    var imgEl = card ? card.querySelector('img.bg-img') : null;
-    var renderW = canvas.width, renderH = canvas.height;
-    var imgOffsetX = 0, imgOffsetY = 0;
-    if (imgEl) {
-      var ir = imgEl.getBoundingClientRect();
-      var cr = card.getBoundingClientRect();
-      if (ir.width > 0) {
-        renderW = ir.width;
-        renderH = ir.height;
-        imgOffsetX = ir.left - cr.left;
-        imgOffsetY = ir.top - cr.top;
+    // V46: 优先使用存储的显示元数据（不依赖 DOM 测量，保证页面隐藏时也能正确导出）
+    var renderW, renderH, imgOffsetX, imgOffsetY;
+    if (bgItem.displayW !== undefined && bgItem.displayH !== undefined) {
+      renderW = bgItem.displayW;
+      renderH = bgItem.displayH;
+      imgOffsetX = bgItem.displayOffsetX || 0;
+      imgOffsetY = bgItem.displayOffsetY || 0;
+    } else {
+      // 兜底：尝试 DOM 测量（页面可见时有效）
+      var card = document.getElementById('loCard_' + idx);
+      var imgEl = card ? card.querySelector('img.bg-img') : null;
+      renderW = canvas.width; renderH = canvas.height;
+      imgOffsetX = 0; imgOffsetY = 0;
+      if (imgEl) {
+        var ir = imgEl.getBoundingClientRect();
+        var cr = card.getBoundingClientRect();
+        if (ir.width > 0) {
+          renderW = ir.width;
+          renderH = ir.height;
+          imgOffsetX = ir.left - cr.left;
+          imgOffsetY = ir.top - cr.top;
+        }
       }
     }
     var scaleX = canvas.width / renderW;
     var scaleY = canvas.height / renderH;
 
-    // V45 hotfix: logoX/logoY 是相对于卡片左上角的，需扣除底图在卡片内的偏移
+    // logoX/logoY 是相对于卡片左上角的，需扣除底图在卡片内的偏移
     var lx = (bgItem.logoX - imgOffsetX) * scaleX;
     var ly = (bgItem.logoY - imgOffsetY) * scaleY;
     var lw = bgItem.logoW * scaleX;
     var lh = bgItem.logoH * scaleY;
 
-    // 绘制旋转后的LOGO
-    ctx.save();
-    ctx.translate(lx + lw / 2, ly + lh / 2);
-    ctx.rotate(bgItem.logoR * Math.PI / 180);
-    ctx.drawImage(loState.logo.img, -lw / 2, -lh / 2, lw, lh);
-    ctx.restore();
+    // 绘制旋转后的LOGO（仅当 LOGO 可用且尺寸有效时）
+    if (loState.logo && loState.logo.img && lw > 0 && lh > 0) {
+      ctx.save();
+      ctx.translate(lx + lw / 2, ly + lh / 2);
+      ctx.rotate(bgItem.logoR * Math.PI / 180);
+      ctx.drawImage(loState.logo.img, -lw / 2, -lh / 2, lw, lh);
+      ctx.restore();
+    }
 
     var dataUrl = canvas.toDataURL('image/png');
     bgItem.resultDataUrl = dataUrl;
