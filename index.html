@@ -286,7 +286,94 @@
     .wm-card canvas { transition: outline .15s; }
     .wm-card canvas:hover { outline: 2px solid var(--pri); outline-offset: -2px; }
 
-    /* 图片批量剪辑模块 */
+    /* 图片裁剪模块 */
+
+    /* 图片+LOGO模块 */
+    .logo-upload-zone {
+      border: 2px dashed var(--border);
+      border-radius: 12px;
+      padding: 16px 24px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color .2s, background .2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      min-height: 50px;
+    }
+    .logo-upload-zone:hover { border-color: var(--pri); background: #f0f5ff; }
+    .logo-upload-zone.has-file { border-style: solid; border-color: #52c41a; background: #f6ffed; }
+
+    .logo-bg-card {
+      position: relative;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      background: #f5f5f5;
+      min-height: 200px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .logo-bg-card img.bg-img {
+      display: block;
+      max-width: 100%;
+      max-height: 360px;
+      object-fit: contain;
+    }
+    .logo-overlay-wrap {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      pointer-events: none;
+    }
+    .logo-overlay-wrap.active { pointer-events: auto; }
+    .logo-drag-box {
+      position: absolute;
+      cursor: move;
+      user-select: none;
+    }
+    .logo-drag-box img {
+      display: block;
+      width: 100%; height: 100%;
+      object-fit: contain;
+    }
+    .logo-handle {
+      position: absolute;
+      width: 12px; height: 12px;
+      background: #1677ff;
+      border: 2px solid #fff;
+      border-radius: 2px;
+      box-shadow: 0 1px 4px rgba(0,0,0,.3);
+      pointer-events: auto;
+    }
+    .logo-handle-nw { top: -6px; left: -6px; cursor: nw-resize; }
+    .logo-handle-ne { top: -6px; right: -6px; cursor: ne-resize; }
+    .logo-handle-sw { bottom: -6px; left: -6px; cursor: sw-resize; }
+    .logo-handle-se { bottom: -6px; right: -6px; cursor: se-resize; }
+    .logo-handle-rot {
+      position: absolute;
+      top: -22px; left: 50%; transform: translateX(-50%);
+      width: 10px; height: 10px;
+      background: #ff4d4f;
+      border: 2px solid #fff;
+      border-radius: 50%;
+      cursor: grab;
+      pointer-events: auto;
+      box-shadow: 0 1px 4px rgba(0,0,0,.3);
+    }
+    .logo-sync-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 16px;
+      background: #fffbe6;
+      border: 1px solid #ffe58f;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      font-size: .82rem;
+    }
     .be-card { position:relative;overflow:hidden }
     .be-card canvas { transition: outline .15s; }
     .be-card canvas:hover { outline: 2px solid var(--pri); outline-offset: -2px; }
@@ -421,7 +508,11 @@
     </div>
     <div class="sidebar-item" onclick="showPage('batch-edit',this)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-      图片批量剪辑
+      图片裁剪
+    </div>
+    <div class="sidebar-item" onclick="showPage('logo-overlay',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>
+      图片+LOGO
     </div>
   </nav>
 
@@ -667,11 +758,11 @@
       </div>
     </div>
 
-    <!-- ====== 图片批量剪辑 ====== -->
+    <!-- ====== 图片裁剪 ====== -->
     <div id="page-batch-edit" class="page">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:12px">
         <div>
-          <h2 style="margin:0 0 4px;font-size:1.15rem">✂️ 图片批量剪辑 <span style="font-size:.65rem;background:linear-gradient(135deg,#1677ff,#722ed1);color:#fff;padding:2px 7px;border-radius:10px;vertical-align:middle;margin-left:4px">NEW</span></h2>
+          <h2 style="margin:0 0 4px;font-size:1.15rem">✂️ 图片裁剪 <span style="font-size:.65rem;background:linear-gradient(135deg,#1677ff,#722ed1);color:#fff;padding:2px 7px;border-radius:10px;vertical-align:middle;margin-left:4px">NEW</span></h2>
           <p style="margin:0;font-size:.82rem;color:var(--muted)">上传图片 → 裁剪/旋转/翻转 → 批量导出（自动命名）</p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap" id="beToolbar">
@@ -715,6 +806,73 @@
           <div style="font-size:3rem;margin-bottom:12px">🖼️</div>
           <p style="font-size:.95rem;margin-bottom:16px">拖拽图片到此处，或点击"上传图片"按钮</p>
           <button class="btn btn-primary" onclick="document.getElementById('beFileInput').click()">选择图片文件</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ====== 图片+LOGO ====== -->
+    <div id="page-logo-overlay" class="page">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:12px">
+        <div>
+          <h2 style="margin:0 0 4px;font-size:1.15rem">🏷️ 图片+LOGO <span style="font-size:.65rem;background:linear-gradient(135deg,#1677ff,#722ed1);color:#fff;padding:2px 7px;border-radius:10px;vertical-align:middle;margin-left:4px">NEW</span></h2>
+          <p style="margin:0;font-size:.82rem;color:var(--muted)">上传LOGO → 上传底图 → 拖拽/缩放/旋转LOGO → 批量导出</p>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap" id="loToolbar">
+          <button class="btn btn-primary btn-sm" onclick="document.getElementById('loLogoInput').click()" id="loLogoBtn">
+            🏷️ LOGO上传
+          </button>
+          <input type="file" id="loLogoInput" accept="image/*" style="display:none" onchange="handleLoLogoUpload(this)" />
+          <button class="btn btn-outline btn-sm" onclick="document.getElementById('loBgInput').click()" id="loBgBtn">
+            📁 底图批量上传
+          </button>
+          <input type="file" id="loBgInput" accept="image/*" multiple style="display:none" onchange="handleLoBgUpload(this)" />
+          <span style="font-size:.75rem;color:var(--muted);padding:6px 4px;user-select:none">🔗 同步：</span>
+          <label style="cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:4px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-size:.75rem;color:var(--muted)" onclick="toggleLoSync()">
+            <input type="checkbox" id="loSyncCheck" style="margin:0;accent-color:#1677ff;pointer-events:none" /> 同步所有图
+          </label>
+          <button class="btn btn-success btn-sm" onclick="exportLoImages()" id="loExportBtn" disabled>
+            💾 批量导出
+          </button>
+          <button class="btn btn-outline btn-sm btn-danger" onclick="clearLoAll()" id="loClearBtn" disabled>
+            🗑 清空
+          </button>
+        </div>
+      </div>
+
+      <!-- 上传区域 -->
+      <div id="loUploadArea" style="display:flex;gap:16px;margin-bottom:16px;flex-wrap:wrap">
+        <div style="flex:1;min-width:200px">
+          <div class="logo-upload-zone" id="loLogoZone" onclick="document.getElementById('loLogoInput').click()" style="flex-direction:column;gap:8px">
+            <div style="font-size:2rem">🏷️</div>
+            <div style="font-weight:500">上传LOGO图片</div>
+            <div style="font-size:.75rem;color:var(--muted)">支持 PNG/JPG/WebP（推荐透明PNG）</div>
+          </div>
+          <div id="loLogoPreview" style="display:none;text-align:center;margin-top:8px">
+            <img id="loLogoThumb" style="max-width:120px;max-height:60px;border:2px solid #52c41a;border-radius:8px;padding:4px" />
+            <div style="font-size:.75rem;color:#52c41a;margin-top:4px">✅ LOGO已加载</div>
+          </div>
+        </div>
+        <div style="flex:2;min-width:280px">
+          <div class="logo-upload-zone" id="loBgZone" onclick="document.getElementById('loBgInput').click()" style="flex-direction:column;gap:8px">
+            <div style="font-size:2rem">🖼️</div>
+            <div style="font-weight:500">上传底图（可批量）</div>
+            <div style="font-size:.75rem;color:var(--muted)">支持拖拽或点击上传，支持多选</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 同步提示条 -->
+      <div class="logo-sync-bar" id="loSyncBar" style="display:none">
+        <span>🔗 <b>同步模式已开启</b>：在图1上拖动/缩放/旋转LOGO，所有底图的LOGO位置将自动同步</span>
+      </div>
+
+      <!-- 预览网格 -->
+      <div id="loPreviewGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px">
+        <div id="loEmptyState" style="grid-column:1/-1;text-align:center;padding:60px 20px;color:var(--muted)">
+          <div style="font-size:3rem;margin-bottom:12px">🏷️</div>
+          <p style="font-size:.95rem;margin-bottom:8px">第一步：上传LOGO图片</p>
+          <p style="font-size:.82rem;margin-bottom:16px">第二步：批量上传底图</p>
+          <p style="font-size:.82rem;color:var(--pri)">然后拖拽/缩放/旋转每张底图上的LOGO</p>
         </div>
       </div>
     </div>
@@ -917,7 +1075,7 @@ const MAX_IMG_PER_GROUP = 9;
 // =============================================
 // Supabase 初始化（容错：CDN 加载失败不影响核心功能）
 // =============================================
-console.log('🛠 批量上架工具 V43 | 2026-06-12 | 导出模板一致性强化+产品多选导出 | Telea FMM | JSZip');
+console.log('🛠 批量上架工具 V44 | 2026-06-12 | 图片+LOGO板块 + 图片裁剪更名 | Telea FMM | JSZip');
 // =============================================
 const SUPABASE_URL = 'https://khrppyhcjzkkokyhnhhd.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtocnBweWhjanpra29reWhuaGhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwNzY1NDEsImV4cCI6MjA5NjY1MjU0MX0.uS9YablBNwjUmQlwRbLRw3SEPNgEnO1Uc6Poe1SeB88';
@@ -5611,7 +5769,7 @@ function updateWmButtons() {
 }
 
 // =============================================
-// 图片批量剪辑
+// 图片裁剪
 // =============================================
 var beState = {
   images: [],       // { id, file, name, dataUrl, width, height, canvas, edited, editedUrl, editCanvas }
@@ -6493,6 +6651,509 @@ function updateBeButtons() {
 }
 
 // =============================================
+// V44: 图片+LOGO 模块
+// =============================================
+var loState = {
+  logo: null,       // { dataUrl, img: Image, name }
+  bgImages: [],     // [{ id, dataUrl, img: Image, name, logoX, logoY, logoW, logoH, logoR }]
+  sync: false,      // 是否同步所有图
+  activeIdx: -1     // 当前活跃的底图索引
+};
+
+// 默认 LOGO 尺寸比例（初始占底图宽度的 20%）
+var LO_DEFAULT_RATIO = 0.2;
+
+function handleLoLogoUpload(input) {
+  var file = input.files[0];
+  if (!file) return;
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    var img = new Image();
+    img.onload = function() {
+      loState.logo = { dataUrl: e.target.result, img: img, name: file.name };
+      document.getElementById('loLogoZone').classList.add('has-file');
+      document.getElementById('loLogoPreview').style.display = 'block';
+      document.getElementById('loLogoThumb').src = e.target.result;
+      document.getElementById('loLogoBtn').textContent = '🔄 更换LOGO';
+      updateLoEmptyState();
+      renderLoGrid();
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+  input.value = '';
+}
+
+function handleLoBgUpload(input) {
+  var files = Array.from(input.files);
+  if (!files.length) return;
+  var loaded = 0;
+  files.forEach(function(file) {
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      var img = new Image();
+      img.onload = function() {
+        loState.bgImages.push({
+          id: Date.now() + '_' + Math.random().toString(36).substr(2,6),
+          dataUrl: e.target.result,
+          img: img,
+          name: file.name,
+          logoX: 0, logoY: 0,
+          logoW: 0, logoH: 0,  // 0 = 未初始化
+          logoR: 0
+        });
+        loaded++;
+        if (loaded === files.length) {
+          renderLoGrid();
+        }
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+  input.value = '';
+  updateLoEmptyState();
+}
+
+function updateLoEmptyState() {
+  var empty = document.getElementById('loEmptyState');
+  var area = document.getElementById('loUploadArea');
+  var exportBtn = document.getElementById('loExportBtn');
+  var clearBtn = document.getElementById('loClearBtn');
+  if (!loState.logo && loState.bgImages.length === 0) {
+    if (empty) empty.style.display = 'block';
+    if (area) area.style.display = 'flex';
+    exportBtn.disabled = true;
+    clearBtn.disabled = true;
+  } else if (!loState.logo && loState.bgImages.length > 0) {
+    if (empty) empty.innerHTML = '<div style="font-size:3rem;margin-bottom:12px">🏷️</div><p style="font-size:.95rem;margin-bottom:16px">请先上传 LOGO 图片</p>';
+    if (empty) empty.style.display = 'block';
+    exportBtn.disabled = true;
+    clearBtn.disabled = false;
+  } else if (loState.logo && loState.bgImages.length === 0) {
+    if (empty) empty.innerHTML = '<div style="font-size:3rem;margin-bottom:12px">🖼️</div><p style="font-size:.95rem;margin-bottom:16px">请批量上传底图</p>';
+    if (empty) empty.style.display = 'block';
+    exportBtn.disabled = true;
+    clearBtn.disabled = !!loState.logo;
+  } else {
+    if (empty) empty.style.display = 'none';
+    if (area) area.style.display = 'none';
+    exportBtn.disabled = false;
+    clearBtn.disabled = false;
+  }
+}
+
+// 初始化单个底图的 LOGO 位置（居中，大小=底图短边的20%）
+function initLogoPosition(bgItem, cardW, cardH) {
+  if (!loState.logo || !loState.logo.img) return;
+  var logoImg = loState.logo.img;
+  // 计算 LOGO 在底图渲染区域内的初始尺寸
+  var logoW, logoH;
+  var bgW = bgItem.img.width, bgH = bgItem.img.height;
+  var scale = Math.min(cardW / bgW, cardH / bgH);
+  var renderW = bgW * scale, renderH = bgH * scale;
+  var shortSide = Math.min(renderW, renderH);
+  var targetW = shortSide * LO_DEFAULT_RATIO;
+  var ratio = logoImg.width / logoImg.height;
+  if (ratio >= 1) {
+    logoW = targetW;
+    logoH = targetW / ratio;
+  } else {
+    logoH = targetW;
+    logoW = targetW * ratio;
+  }
+  // 居中
+  bgItem.logoX = (renderW - logoW) / 2;
+  bgItem.logoY = (renderH - logoH) / 2;
+  bgItem.logoW = logoW;
+  bgItem.logoH = logoH;
+  bgItem.logoR = 0;
+}
+
+function renderLoGrid() {
+  var grid = document.getElementById('loPreviewGrid');
+  if (!loState.logo || loState.bgImages.length === 0) {
+    updateLoEmptyState();
+    return;
+  }
+  updateLoEmptyState();
+
+  var cards = loState.bgImages.map(function(bgItem, idx) {
+    // 生成卡片HTML
+    return '<div class="logo-bg-card" id="loCard_' + idx + '">' +
+      '<img class="bg-img" src="' + bgItem.dataUrl + '" onload="onLoCardLoad(' + idx + ',this)" />' +
+      '<div class="logo-overlay-wrap" id="loOverlay_' + idx + '">' +
+        '<div class="logo-drag-box" id="loDragBox_' + idx + '" style="display:none">' +
+          '<img src="' + loState.logo.dataUrl + '" draggable="false" />' +
+          '<div class="logo-handle logo-handle-nw" data-lo-h="nw"></div>' +
+          '<div class="logo-handle logo-handle-ne" data-lo-h="ne"></div>' +
+          '<div class="logo-handle logo-handle-sw" data-lo-h="sw"></div>' +
+          '<div class="logo-handle logo-handle-se" data-lo-h="se"></div>' +
+          '<div class="logo-handle-rot" data-lo-h="rot"></div>' +
+        '</div>' +
+      '</div>' +
+      '<div style="position:absolute;bottom:4px;left:4px;background:rgba(0,0,0,.6);color:#fff;font-size:.7rem;padding:2px 6px;border-radius:4px">' + escHtml(bgItem.name) + '</div>' +
+    '</div>';
+  }).join('');
+
+  // 保存现有子元素（empty state），以免 innerHTML 覆盖了它
+  var emptyEl = document.getElementById('loEmptyState');
+  var emptyHtml = emptyEl ? emptyEl.outerHTML : '';
+  grid.innerHTML = cards + (emptyEl ? '' : '<div id="loEmptyState" style="display:none;grid-column:1/-1;text-align:center;padding:60px 20px;color:var(--muted)"></div>');
+
+  // 初始化每张图的 LOGO 拖拽
+  loState.bgImages.forEach(function(bgItem, idx) {
+    setupLoDrag(idx);
+  });
+}
+
+function onLoCardLoad(idx, imgEl) {
+  var card = imgEl.parentElement;
+  var cardW = card.clientWidth;
+  var cardH = card.clientHeight;
+  var bgItem = loState.bgImages[idx];
+  if (!bgItem) return;
+  // 如果已有 LOGO 尺寸（从同步来的），保留
+  if (bgItem.logoW === 0 && bgItem.logoH === 0) {
+    initLogoPosition(bgItem, cardW, cardH);
+  }
+  // 显示并定位 LOGO
+  updateLoOverlayPos(idx);
+  var dragBox = document.getElementById('loDragBox_' + idx);
+  if (dragBox) dragBox.style.display = 'block';
+}
+
+function updateLoOverlayPos(idx) {
+  var bgItem = loState.bgImages[idx];
+  if (!bgItem) return;
+  var dragBox = document.getElementById('loDragBox_' + idx);
+  if (!dragBox) return;
+  dragBox.style.left = bgItem.logoX + 'px';
+  dragBox.style.top = bgItem.logoY + 'px';
+  dragBox.style.width = bgItem.logoW + 'px';
+  dragBox.style.height = bgItem.logoH + 'px';
+  dragBox.style.transform = 'rotate(' + bgItem.logoR + 'deg)';
+}
+
+// 获取底图渲染区域信息
+function getLoBgRenderRect(idx) {
+  var card = document.getElementById('loCard_' + idx);
+  var img = card ? card.querySelector('img.bg-img') : null;
+  if (!card || !img) return { left: 0, top: 0, w: 300, h: 200 };
+  var cr = card.getBoundingClientRect();
+  var ir = img.getBoundingClientRect();
+  return {
+    left: ir.left - cr.left,
+    top: ir.top - cr.top,
+    w: ir.width,
+    h: ir.height
+  };
+}
+
+// V44: LOGO 拖拽/缩放/旋转
+function setupLoDrag(idx) {
+  var dragBox = document.getElementById('loDragBox_' + idx);
+  var overlay = document.getElementById('loOverlay_' + idx);
+  if (!dragBox || !overlay) return;
+
+  var dragMode = null; // 'move'|'nw'|'ne'|'sw'|'se'|'rot'
+  var startX, startY;
+  var initX, initY, initW, initH, initR;
+  var bgItem = loState.bgImages[idx];
+
+  function getBgItem() { return loState.bgImages[idx]; }
+
+  dragBox.addEventListener('mousedown', function(e) {
+    var handle = e.target.closest('[data-lo-h]');
+    if (handle) {
+      dragMode = handle.dataset.loH;
+    } else {
+      dragMode = 'move';
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    overlay.classList.add('active');
+    loState.activeIdx = idx;
+    startX = e.clientX;
+    startY = e.clientY;
+    var bi = getBgItem();
+    initX = bi.logoX; initY = bi.logoY;
+    initW = bi.logoW; initH = bi.logoH; initR = bi.logoR;
+
+    function onMove(ev) {
+      var dx = ev.clientX - startX;
+      var dy = ev.clientY - startY;
+      var bi2 = getBgItem();
+
+      if (dragMode === 'move') {
+        bi2.logoX = initX + dx;
+        bi2.logoY = initY + dy;
+      } else if (dragMode === 'rot') {
+        // 旋转：以 LOGO 中心为轴，鼠标角度变化
+        var box = dragBox.getBoundingClientRect();
+        var cx = box.left + box.width / 2;
+        var cy = box.top + box.height / 2;
+        var a1 = Math.atan2(startY - cy, startX - cx);
+        var a2 = Math.atan2(ev.clientY - cy, ev.clientX - cx);
+        bi2.logoR = initR + (a2 - a1) * 180 / Math.PI;
+      } else {
+        // 缩放：角手柄
+        var nwX = initX, nwY = initY;
+        var neX = initX + initW, neY = initY;
+        var swX = initX, swY = initY + initH;
+        var seX = initX + initW, seY = initY + initH;
+
+        // 将dx/dy分解到旋转坐标系
+        var rad = initR * Math.PI / 180;
+        var cos = Math.cos(rad), sin = Math.sin(rad);
+        var ldx = dx * cos + dy * sin;   // 沿宽度方向
+        var ldy = -dx * sin + dy * cos;  // 沿高度方向
+
+        var newX = initX, newY = initY, newW = initW, newH = initH;
+        var minSz = 15;
+        var logoRatio = initW / initH;
+
+        switch (dragMode) {
+          case 'nw':
+            newX = initX + ldx;
+            newY = initY + ldy;
+            newW = initW - ldx;
+            newH = initH - ldy;
+            break;
+          case 'ne':
+            newY = initY + ldy;
+            newW = initW + ldx;
+            newH = initH - ldy;
+            break;
+          case 'sw':
+            newX = initX + ldx;
+            newW = initW - ldx;
+            newH = initH + ldy;
+            break;
+          case 'se':
+            newW = initW + ldx;
+            newH = initH + ldy;
+            break;
+        }
+
+        if (newW < minSz) newW = minSz;
+        if (newH < minSz) newH = minSz;
+
+        // 锁定宽高比
+        if (Math.abs(newW / newH - logoRatio) > 0.02) {
+          if (dragMode === 'nw' || dragMode === 'se') {
+            newH = newW / logoRatio;
+            if (dragMode === 'nw') newY = initY + initH - newH;
+          } else {
+            newW = newH * logoRatio;
+            if (dragMode === 'ne') newY = initY + initH - newH;
+          }
+        }
+
+        bi2.logoX = newX; bi2.logoY = newY;
+        bi2.logoW = newW; bi2.logoH = newH;
+      }
+
+      updateLoOverlayPos(idx);
+
+      // 同步到所有图
+      if (loState.sync && idx === 0) {
+        syncLogoToAll(idx);
+      }
+    }
+
+    function onUp() {
+      dragMode = null;
+      overlay.classList.remove('active');
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    }
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+}
+
+function syncLogoToAll(srcIdx) {
+  var src = loState.bgImages[srcIdx];
+  if (!src) return;
+  // 按比例同步（不同底图尺寸可能不同，LOGO保持相同的相对位置和大小）
+  var srcRect = getLoBgRenderRect(srcIdx);
+  if (srcRect.w === 0 || srcRect.h === 0) return;
+
+  var relX = src.logoX / srcRect.w;
+  var relY = src.logoY / srcRect.h;
+  var relW = src.logoW / srcRect.w;
+  var relH = src.logoH / srcRect.h;
+
+  loState.bgImages.forEach(function(item, i) {
+    if (i === srcIdx) return;
+    var rect = getLoBgRenderRect(i);
+    if (rect.w === 0 || rect.h === 0) return;
+    item.logoX = relX * rect.w;
+    item.logoY = relY * rect.h;
+    item.logoW = relW * rect.w;
+    item.logoH = relH * rect.h;
+    item.logoR = src.logoR;
+    updateLoOverlayPos(i);
+  });
+}
+
+function toggleLoSync() {
+  loState.sync = document.getElementById('loSyncCheck').checked;
+  document.getElementById('loSyncBar').style.display = loState.sync ? 'flex' : 'none';
+  if (loState.sync && loState.bgImages.length > 0) {
+    syncLogoToAll(0);
+  }
+}
+
+// 渲染最终带LOGO的图片
+function renderLoResult(idx) {
+  return new Promise(function(resolve, reject) {
+    var bgItem = loState.bgImages[idx];
+    var canvas = document.createElement('canvas');
+    canvas.width = bgItem.img.width;
+    canvas.height = bgItem.img.height;
+    var ctx = canvas.getContext('2d');
+
+    // 绘制底图
+    ctx.drawImage(bgItem.img, 0, 0);
+
+    // 计算 LOGO 在底图原始坐标系中的位置
+    var card = document.getElementById('loCard_' + idx);
+    var imgEl = card ? card.querySelector('img.bg-img') : null;
+    var renderW = canvas.width, renderH = canvas.height;
+    if (imgEl) {
+      var ir = imgEl.getBoundingClientRect();
+      if (ir.width > 0) {
+        renderW = ir.width;
+        renderH = ir.height;
+      }
+    }
+    var scaleX = canvas.width / renderW;
+    var scaleY = canvas.height / renderH;
+
+    var lx = bgItem.logoX * scaleX;
+    var ly = bgItem.logoY * scaleY;
+    var lw = bgItem.logoW * scaleX;
+    var lh = bgItem.logoH * scaleY;
+
+    // 绘制旋转后的LOGO
+    ctx.save();
+    ctx.translate(lx + lw / 2, ly + lh / 2);
+    ctx.rotate(bgItem.logoR * Math.PI / 180);
+    ctx.drawImage(loState.logo.img, -lw / 2, -lh / 2, lw, lh);
+    ctx.restore();
+
+    var dataUrl = canvas.toDataURL('image/png');
+    bgItem.resultDataUrl = dataUrl;
+    resolve(dataUrl);
+  });
+}
+
+// 导出
+async function exportLoImages() {
+  if (!loState.logo || loState.bgImages.length === 0) {
+    showToast('请先上传LOGO和底图', 'warn'); return;
+  }
+  if (typeof JSZip === 'undefined') {
+    _exportLoFallback(); return;
+  }
+
+  showToast('正在渲染 ' + loState.bgImages.length + ' 张图片…', 'info');
+  var zip = new JSZip();
+  var nameCount = {};
+
+  for (var i = 0; i < loState.bgImages.length; i++) {
+    var dataUrl = await renderLoResult(i);
+    var item = loState.bgImages[i];
+    var dotIdx = item.name.lastIndexOf('.');
+    var baseName = dotIdx > 0 ? item.name.substring(0, dotIdx) : item.name;
+    if (!nameCount[baseName]) nameCount[baseName] = 0;
+    nameCount[baseName]++;
+    var newName = baseName + '_带LOGO(' + nameCount[baseName] + ').png';
+
+    var base64 = dataUrl.split(',')[1];
+    zip.file(newName, base64, { base64: true });
+  }
+
+  try {
+    var zipBlob = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
+    var url = URL.createObjectURL(zipBlob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = '带LOGO图片_' + loState.bgImages.length + '张.zip';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+    showToast('✅ 已导出 ' + loState.bgImages.length + ' 张带LOGO图片', 'success');
+  } catch(e) {
+    console.error('ZIP导出失败:', e);
+    _exportLoFallback();
+  }
+}
+
+function _exportLoFallback() {
+  showToast('正在逐张导出…', 'info');
+  var count = 0;
+  var nameCount = {};
+  loState.bgImages.forEach(function(item, i) {
+    renderLoResult(i).then(function(dataUrl) {
+      var dotIdx = item.name.lastIndexOf('.');
+      var baseName = dotIdx > 0 ? item.name.substring(0, dotIdx) : item.name;
+      if (!nameCount[baseName]) nameCount[baseName] = 0;
+      nameCount[baseName]++;
+      var newName = baseName + '_带LOGO(' + nameCount[baseName] + ').png';
+
+      var a = document.createElement('a');
+      a.href = dataUrl;
+      a.download = newName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      count++;
+      if (count === loState.bgImages.length) {
+        showToast('✅ 已导出 ' + count + ' 张图片', 'success');
+      }
+    });
+  });
+}
+
+function clearLoAll() {
+  loState.logo = null;
+  loState.bgImages = [];
+  loState.sync = false;
+  loState.activeIdx = -1;
+  document.getElementById('loSyncCheck').checked = false;
+  document.getElementById('loSyncBar').style.display = 'none';
+  document.getElementById('loLogoZone').classList.remove('has-file');
+  document.getElementById('loLogoPreview').style.display = 'none';
+  document.getElementById('loLogoBtn').textContent = '🏷️ LOGO上传';
+  document.getElementById('loBgZone').classList.remove('has-file');
+  document.getElementById('loPreviewGrid').innerHTML = '<div id="loEmptyState" style="grid-column:1/-1;text-align:center;padding:60px 20px;color:var(--muted)"><div style="font-size:3rem;margin-bottom:12px">🏷️</div><p style="font-size:.95rem;margin-bottom:8px">第一步：上传LOGO图片</p><p style="font-size:.82rem;margin-bottom:16px">第二步：批量上传底图</p><p style="font-size:.82rem;color:var(--pri)">然后拖拽/缩放/旋转每张底图上的LOGO</p></div>';
+  updateLoEmptyState();
+}
+
+// 设置图片+LOGO页面的拖拽上传
+function setupLoDragDrop() {
+  var zone = document.getElementById('loBgZone');
+  if (!zone) return;
+  zone.addEventListener('dragover', function(e) { e.preventDefault(); zone.style.borderColor = '#1677ff'; zone.style.background = '#f0f5ff'; });
+  zone.addEventListener('dragleave', function(e) { zone.style.borderColor = loState.bgImages.length ? '#52c41a' : ''; zone.style.background = ''; });
+  zone.addEventListener('drop', function(e) {
+    e.preventDefault();
+    zone.style.borderColor = ''; zone.style.background = '';
+    var files = Array.from(e.dataTransfer.files).filter(function(f) { return f.type.startsWith('image/'); });
+    if (!files.length) return;
+    var dt = new DataTransfer();
+    files.forEach(function(f) { dt.items.add(f); });
+    document.getElementById('loBgInput').files = dt.files;
+    handleLoBgUpload(document.getElementById('loBgInput'));
+  });
+}
+
+// =============================================
 // V41: 全局诊断函数 — 在浏览器控制台输入 __diagExport() 查看导出模板链路
 // =============================================
 window.__diagExport = function() {
@@ -6537,8 +7198,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   // 设置去水印页面的拖拽上传
   setupWmDragDrop();
-  // 设置图片批量剪辑页面的拖拽上传
+  // 设置图片裁剪页面的拖拽上传
   setupBeDragDrop();
+  // V44: 设置图片+LOGO页面的拖拽上传
+  setupLoDragDrop();
   // 设置初始同步状态
   setSyncStatus(sb ? 'idle' : 'offline');
 });
