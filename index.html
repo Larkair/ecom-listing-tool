@@ -132,6 +132,32 @@
     .field-extra-cell { min-width: 200px; }
     .field-assoc-cell { min-width: 160px; }
 
+    /* V45: 模板库列表 */
+    .tpl-library-list { display:flex; flex-direction:column; gap:8px; max-height: 320px; overflow-y: auto; }
+    .tpl-library-item { display:flex; align-items:center; gap:12px; padding:12px 16px; border:1.5px solid var(--border); border-radius:10px; transition: all .2s; cursor:pointer; }
+    .tpl-library-item:hover { border-color: var(--pri-light); background: #f8faff; }
+    .tpl-library-item.active { border-color: var(--pri); background: #f0f5ff; box-shadow: 0 1px 6px rgba(24,144,255,.15); }
+    .tpl-library-item .tpl-icon { width:40px; height:40px; border-radius:8px; background:#e6f7e6; display:flex; align-items:center; justify-content:center; flex-shrink:0; font-size:1.2rem; }
+    .tpl-library-item .tpl-info { flex:1; min-width:0; }
+    .tpl-library-item .tpl-name { font-weight:600; font-size:.88rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .tpl-library-item .tpl-meta { font-size:.73rem; color:var(--muted); margin-top:2px; }
+    .tpl-library-item .tpl-actions { display:flex; gap:6px; flex-shrink:0; }
+    .tpl-library-item .tpl-actions button { padding:4px 10px; font-size:.75rem; }
+    .tpl-selector-row { display:flex; align-items:center; gap:12px; padding:12px 16px; background:#fafafa; border-bottom:1px solid var(--border); }
+    .tpl-selector-row select { min-width:220px; }
+    /* V45: 模板保存弹窗 */
+    .tpl-save-modal-overlay { position:fixed; top:0;left:0;right:0;bottom:0; background:rgba(0,0,0,.4); z-index:9999; display:flex; align-items:center; justify-content:center; }
+    .tpl-save-modal { background:#fff; border-radius:14px; padding:28px; max-width:520px; width:90%; max-height:90vh; overflow-y:auto; box-shadow:0 20px 60px rgba(0,0,0,.2); }
+    .tpl-save-modal h3 { margin:0 0 6px; font-size:1.05rem; }
+    .tpl-save-modal .tpl-save-sub { font-size:.78rem; color:var(--muted); margin-bottom:20px; }
+    .tpl-save-modal .form-group { margin-bottom:16px; }
+    .tpl-save-modal .form-label { display:block; font-size:.82rem; font-weight:600; margin-bottom:4px; }
+    .tpl-save-modal .form-ctrl { width:100%; padding:8px 12px; border:1.5px solid var(--border); border-radius:8px; font-size:.85rem; }
+    .tpl-save-modal .form-row { display:flex; gap:12px; }
+    .tpl-save-modal .form-row .form-group { flex:1; }
+    .tpl-save-modal .tpl-preview { background:#f9fafb; border-radius:8px; padding:10px 14px; max-height:180px; overflow-y:auto; font-size:.78rem; margin-bottom:16px; }
+    .tpl-save-modal .tpl-actions { display:flex; gap:8px; justify-content:flex-end; margin-top:16px; }
+
     /* 标签输入 */
     .tag-input-wrap { border: 1.5px solid var(--border); border-radius: 8px; padding: 4px 8px;
                       display: flex; flex-wrap: wrap; gap: 4px; min-height: 34px; cursor: text; background: #fff; }
@@ -531,24 +557,65 @@
         <div class="step" id="step4"><div class="step-dot">4</div><div class="step-label">导出上架</div></div>
       </div>
 
-      <div class="card">
+      <div class="card" id="templateLibraryCard">
         <div class="card-header">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--pri)" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-          <div><div class="card-title">导入平台模板</div><div class="card-sub">支持 .xlsx / .xls / .csv 格式</div></div>
-          <div class="ml-auto flex gap8">
-            <span id="importedFileName" class="text-sm text-muted"></span>
+          <div><div class="card-title">模板管理</div><div class="card-sub">当前平台已保存的模板（支持多模板）</div></div>
+          <div class="ml-auto">
             <button class="btn btn-primary btn-sm" onclick="document.getElementById('templateFile').click()">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-              选择文件
+              + 上传新模板
             </button>
             <input type="file" id="templateFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleTemplateImport(this)" />
           </div>
         </div>
         <div class="card-body">
-          <div id="uploadZone" class="upload-zone" ondragover="event.preventDefault();this.classList.add('dragover')" ondragleave="this.classList.remove('dragover')" ondrop="handleDrop(event)">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
-            <p>拖拽文件到此处，或 <strong>点击选择文件</strong></p>
-            <p style="margin-top:6px;font-size:.78rem">当前平台：<strong id="uploadPlatformTip">Shopee</strong></p>
+          <div id="templateLibraryList" class="tpl-library-list">
+            <div class="empty-state" style="padding:30px 10px">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+              <p style="font-size:.85rem">暂无模板 · 点击「+ 上传新模板」开始</p>
+              <p style="font-size:.73rem;color:var(--muted)">当前平台：<strong id="uploadPlatformTip">Shopee</strong></p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- V45: 模板保存弹窗 -->
+      <div id="templateSaveModal" class="tpl-save-modal-overlay" style="display:none">
+        <div class="tpl-save-modal">
+          <h3>💾 保存模板到模板库</h3>
+          <div class="tpl-save-sub">为模板设置自定义名称和配置，保存后可随时调用</div>
+          <div class="form-group">
+            <label class="form-label">📝 模板名称（自定义）</label>
+            <input class="form-ctrl" id="tplSaveName" placeholder="例如：Shopee批量上架模板 V1" />
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">📄 字段所在 Sheet（第几页）</label>
+              <select class="form-ctrl" id="tplSaveExtSheet" onchange="onTplSaveSheetChange()"></select>
+            </div>
+            <div class="form-group">
+              <label class="form-label"># 字段所在行号</label>
+              <input class="form-ctrl" type="number" id="tplSaveExtRow" value="1" min="1" onchange="onTplSaveSheetChange()" style="width:80px" />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">📥 写入目标 Sheet</label>
+              <select class="form-ctrl" id="tplSaveWriteSheet"></select>
+            </div>
+            <div class="form-group">
+              <label class="form-label"># 数据起始写入行</label>
+              <input class="form-ctrl" type="number" id="tplSaveWriteRow" value="6" min="1" max="100" style="width:80px" />
+            </div>
+          </div>
+          <div class="tpl-preview" id="tplSavePreview">
+            <div style="color:var(--muted);font-size:.75rem;margin-bottom:4px">📌 选中行预览（将作为字段名）：</div>
+            <div id="tplSavePreviewContent">—</div>
+          </div>
+          <div class="tpl-actions">
+            <button class="btn btn-outline" onclick="closeTemplateSaveModal()">取消</button>
+            <button class="btn btn-primary" onclick="saveTemplateToLibrary()">💾 保存模板</button>
           </div>
         </div>
       </div>
@@ -563,7 +630,17 @@
             <button class="btn btn-primary btn-sm" onclick="saveFieldConfig()">保存配置 →</button>
           </div>
         </div>
-        <div class="card-body" style="overflow-x:auto">
+        <div class="card-body">
+          <!-- V45: 模板选择器 -->
+          <div class="tpl-selector-row" id="templateSelectorRow">
+            <label style="font-weight:600;font-size:.82rem">📄 选择配置模板：</label>
+            <select class="form-ctrl" id="activeTemplateSelect" onchange="onActiveTemplateChange()">
+              <option value="">-- 请先选择模板 --</option>
+            </select>
+            <span id="activeTemplateInfo" style="font-size:.75rem;color:var(--muted)"></span>
+          </div>
+          <!-- 字段配置区域（选择模板后显示） -->
+          <div id="fieldConfigArea" style="display:none;overflow-x:auto">
           <table class="field-table">
             <thead>
               <tr>
@@ -577,6 +654,7 @@
             </thead>
             <tbody id="fieldList"></tbody>
           </table>
+          </div>
         </div>
       </div>
     </div>
@@ -1333,6 +1411,8 @@ const state = {
   currentSchemeName: { shopee: '', lazada: '', tiktok: '' },
   currentSchemeId: { shopee: null, lazada: null, tiktok: null },
   titleSchemes: { shopee: [], lazada: [], tiktok: [] },
+  templateLibrary: { shopee: [], lazada: [], tiktok: [] },  // V45: 多模板库
+  activeTemplateId: { shopee: '', lazada: '', tiktok: '' }, // V45: 当前选中的模板ID
   exportRecords: [],      // V37: 导出记录 [{ id, timestamp, filename, status, blob, sheetCount, rowCount, error }]
   currentProductIdx: -1,
   settings: { maxTitleLen: 120, genCount: 5, titleSep: ' ',
@@ -1354,91 +1434,89 @@ const state = {
 // 从 localStorage 恢复模板文件和配置
 // =============================================
 function restoreTemplateFromLocalStorage() {
-  ['shopee','lazada','tiktok'].forEach(async function(platform) {
-    // V43: 如果 loadFromSupabase 已经通过方案恢复了模板的 rawData，优先保留
-    // 避免 localStorage 中残留的旧模板数据覆盖从方案/Supabase 加载的正确模板
-    var existingRawData = state.templates[platform] && state.templates[platform].rawData;
-    if (existingRawData && existingRawData.length > 0) {
-      console.log('📦 restoreTemplateFromLocalStorage: ' + platform + ' 已有 rawData(' + existingRawData.length + ' bytes)，跳过 localStorage 恢复');
-      // 但有 sheetNames/config 可以补充
-      var sheetStr_ = localStorage.getItem('tpl_sheets_' + platform);
-      var configStr_ = localStorage.getItem('tpl_config_' + platform);
-      if (sheetStr_ && !state.templates[platform].sheetNames) {
-        try { state.templates[platform].sheetNames = JSON.parse(sheetStr_); } catch(e) {}
-      }
-      if (configStr_ && !state.templates[platform].config) {
-        try { state.templates[platform].config = JSON.parse(configStr_); } catch(e) {}
-      }
-      return; // 不覆盖
-    }
-    
-    const base64 = localStorage.getItem('tpl_raw_' + platform);
-    const sheetsStr = localStorage.getItem('tpl_sheets_' + platform);
-    const configStr = localStorage.getItem('tpl_config_' + platform);
-    const tplFilename = localStorage.getItem('tpl_filename_' + platform);
-    const storagePath = localStorage.getItem('tpl_storage_path_' + platform);
-    
-    if (!base64 && !configStr && !storagePath) return; // 本平台无保存数据
-    
-    if (!state.templates[platform]) state.templates[platform] = {};
-    
-    // 恢复 rawData
-    if (base64) {
-      try {
-        const bytes = base64ToArrayBuffer(base64);
-        state.templates[platform].rawData = Array.from(new Uint8Array(bytes));
-        console.log('从 localStorage 恢复模板(' + platform + '), 大小:', bytes.byteLength, 'bytes');
-      } catch(e) { console.warn('恢复模板文件失败(' + platform + '):', e.message); }
-    }
-    
-    // V29: 如果 localStorage 没有 rawData，尝试从 Supabase Storage 加载
-    if (!state.templates[platform].rawData && storagePath && sb) {
-      try {
-        var { data: dlData, error: dlErr } = await sb.storage.from('ecom-assets').download(storagePath);
-        if (!dlErr && dlData) {
-          var arrBuf = await dlData.arrayBuffer();
-          state.templates[platform].rawData = Array.from(new Uint8Array(arrBuf));
-          console.log('从 Supabase Storage 恢复模板(' + platform + '), 大小:', arrBuf.byteLength, 'bytes');
-        }
-      } catch(e2) { console.warn('Supabase Storage 恢复模板失败(' + platform + '):', e2.message); }
-    }
-    
-    // 恢复 sheetNames
-    if (sheetsStr) {
-      try {
-        state.templates[platform].sheetNames = JSON.parse(sheetsStr);
-      } catch(e) {}
-    }
-    
-    // 恢复 config
-    if (configStr) {
-      try {
-        state.templates[platform].config = JSON.parse(configStr);
-      } catch(e) {}
-    }
-    
-    // 恢复 filename
-    if (tplFilename) {
-      state.templates[platform].filename = tplFilename;
-    }
-    
-    // 恢复字段提取配置
-    var extractStr = localStorage.getItem('tpl_extract_' + platform);
-    if (extractStr) {
-      try {
-        var ec = JSON.parse(extractStr);
-        state.templates[platform].extractSheet = ec.sheet;
-        state.templates[platform].extractRow = ec.row;
-      } catch(e) {}
-    }
-    
-    // 如果当前平台有恢复，显示配置 UI
-    if (platform === state.platform && state.templates[platform].sheetNames) {
-      showTemplateConfigUI(state.templates[platform].sheetNames, state.templates[platform].config);
-    }
-  });
+  // V45: 先加载模板库
+  loadTemplateLibrary();
   
-  console.log('模板恢复完成:', state.templates);
+  var platform = state.platform;
+  var lib = state.templateLibrary[platform] || [];
+  var activeId = state.activeTemplateId[platform];
+  var activeTpl = activeId ? lib.find(function(t) { return t.id === activeId; }) : null;
+  
+  // 如果有活动模板，设置 state.templates
+  if (activeTpl) {
+    state.templates[platform] = activeTpl;
+    console.log('📦 从模板库恢复活动模板:', activeTpl.name, '| rawData:', activeTpl.rawData ? (activeTpl.rawData.length + ' bytes') : 'null');
+  } else if (lib.length > 0 && !state.templates[platform]) {
+    // 有模板但未选中，用第一个
+    state.templates[platform] = lib[0];
+    state.activeTemplateId[platform] = lib[0].id;
+    console.log('📦 默认使用第一个模板:', lib[0].name);
+  }
+  
+  // Legacy fallback: 如果模板库为空，尝试从旧 localStorage keys 恢复
+  if (lib.length === 0) {
+    migrateLegacyTemplate(platform);
+  }
+  
+  // 恢复模板库UI
+  if (platform === state.platform) {
+    renderTemplateLibrary();
+    updateTemplateSelector();
+    if (activeTpl) {
+      onActiveTemplateChange();
+    } else if (lib.length > 0) {
+      document.getElementById('fieldConfigCard').style.display = 'block';
+    }
+  }
+}
+
+// V45: 从旧版单模板 localStorage 迁移到模板库
+function migrateLegacyTemplate(platform) {
+  var base64 = localStorage.getItem('tpl_raw_' + platform);
+  var sheetsStr = localStorage.getItem('tpl_sheets_' + platform);
+  var configStr = localStorage.getItem('tpl_config_' + platform);
+  var tplFilename = localStorage.getItem('tpl_filename_' + platform);
+  var extractStr = localStorage.getItem('tpl_extract_' + platform);
+  
+  if (!base64 && !configStr) return;
+  
+  var rawData = null;
+  if (base64) {
+    try {
+      var bytes = base64ToArrayBuffer(base64);
+      rawData = Array.from(new Uint8Array(bytes));
+    } catch(e) {}
+  }
+  
+  var sheetNames = ['Sheet1'];
+  if (sheetsStr) { try { sheetNames = JSON.parse(sheetsStr); } catch(e) {} }
+  
+  var config = { sheetName: sheetNames[0] || 'Sheet1', dataStartRow: 6 };
+  if (configStr) { try { config = JSON.parse(configStr); } catch(e) {} }
+  
+  var extSheet = '', extRow = 1;
+  if (extractStr) { try { var ec = JSON.parse(extractStr); extSheet = ec.sheet; extRow = ec.row; } catch(e) {} }
+  
+  var tpl = {
+    id: 'tpl_legacy_' + platform,
+    name: tplFilename ? tplFilename.replace(/\.(xlsx|xls|csv)$/i, '') : '旧模板',
+    filename: tplFilename || 'unknown.xlsx',
+    rawData: rawData,
+    data: [],
+    fields: [],
+    sheetNames: sheetNames,
+    config: config,
+    extractSheet: extSheet,
+    extractRow: extRow,
+    createdAt: new Date().toISOString()
+  };
+  
+  if (!state.templateLibrary[platform]) state.templateLibrary[platform] = [];
+  state.templateLibrary[platform].push(tpl);
+  state.activeTemplateId[platform] = tpl.id;
+  state.templates[platform] = tpl;
+  syncTemplateLibrary();
+  console.log('📦 已迁移旧模板到模板库:', tpl.name);
 }
 
 // =============================================
@@ -1458,15 +1536,26 @@ function switchPlatform(platform, btn) {
   pb.textContent = names[platform];
   pb.className = 'badge-pill ' + cls[platform];
   const fc = document.getElementById('fieldConfigCard');
-  if (state.templates[platform]) {
+  var lib = state.templateLibrary[platform] || [];
+  var activeId = state.activeTemplateId[platform];
+  var activeTpl = activeId ? lib.find(function(t) { return t.id === activeId; }) : null;
+  
+  if (activeTpl) {
+    state.templates[platform] = activeTpl;
     fc.style.display = 'block';
-    document.getElementById('uploadZone').style.display = 'none';
-    document.getElementById('importedFileName').textContent = '✓ ' + state.templates[platform].filename;
+    document.getElementById('fieldConfigArea').style.display = 'block';
+  } else if (lib.length > 0) {
+    // 有模板但未选中
+    fc.style.display = 'block';
+    document.getElementById('fieldConfigArea').style.display = 'none';
   } else {
     fc.style.display = 'none';
-    document.getElementById('uploadZone').style.display = '';
-    document.getElementById('importedFileName').textContent = '';
+    document.getElementById('fieldConfigArea').style.display = 'none';
   }
+  document.getElementById('importedFileName').textContent = '';
+  
+  renderTemplateLibrary();
+  updateTemplateSelector();
   renderFieldList();
   renderProductList();
   updateCurrentSchemeBadge();
@@ -1491,19 +1580,16 @@ function handleTemplateImport(input) {
   const file = input.files[0];
   if (!file) { console.log('No file selected'); return; }
   console.log('Processing file:', file.name, file.size);
-  // 检查 XLSX 库
   if (typeof XLSX === 'undefined') {
     showToast('XLSX 库加载失败，请刷新页面后重试', 'error');
     return;
   }
   const reader = new FileReader();
   reader.onerror = () => { showToast('文件读取失败', 'error'); };
-  reader.onload = async (e) => {
+  reader.onload = (e) => {
     try {
       const arrayBuffer = e.target.result;
-      let data;
       let wb;
-      console.log('File loaded, parsing...');
       if (file.name.toLowerCase().endsWith('.csv')) {
         const text = new TextDecoder('utf-8').decode(arrayBuffer);
         wb = XLSX.read(text, { type: 'string' });
@@ -1511,78 +1597,329 @@ function handleTemplateImport(input) {
         wb = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' });
       }
 
-      // 解析所有 Sheet（用于字段提取引导）
       var allSheetData = {};
       wb.SheetNames.forEach(function(sn) {
         allSheetData[sn] = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, defval: '' });
       });
 
-      // 默认读取第一个 Sheet 的数据
-      data = allSheetData[wb.SheetNames[0]] || [];
-      console.log('Parsed', data?.length, 'rows,', wb.SheetNames.length, 'sheets:', wb.SheetNames.join(', '));
-
-      // 保存完整模板文件（ArrayBuffer → 数组存 state，base64 存 localStorage）
-      const rawArray = Array.from(new Uint8Array(arrayBuffer));
-      const platform = state.platform;
-      const sheetNames = wb.SheetNames || ['Sheet1'];
-      // 默认配置：第一个 sheet，第6行开始
-      const defaultConfig = {
-        sheetName: sheetNames[0] || 'Sheet1',
-        dataStartRow: 6
-      };
-      state.templates[platform] = {
-        filename: file.name,
-        data: data,
-        fields: [],
-        rawData: rawArray,          // ArrayBuffer 转数组，存 state
-        sheetNames: sheetNames,
-        config: defaultConfig
-      };
-      // 存到 localStorage（base64 编码，避免 Array 转 JSON 太大）
-      var tplSaved = false;
-      try {
-        const base64 = arrayBufferToBase64(rawArray);
-        localStorage.setItem('tpl_raw_' + platform, base64);
-        localStorage.setItem('tpl_sheets_' + platform, JSON.stringify(sheetNames));
-        localStorage.setItem('tpl_config_' + platform, JSON.stringify(defaultConfig));
-        localStorage.setItem('tpl_filename_' + platform, file.name);
-        console.log('模板已保存到 localStorage, base64 长度:', base64.length);
-        tplSaved = true;
-      } catch (lsErr) {
-        console.error('localStorage 保存模板失败（可能超出大小限制）:', lsErr.message);
-        // 尝试只保存小数据（sheetNames + config，不含 rawData）
-        try {
-          localStorage.setItem('tpl_sheets_' + platform, JSON.stringify(sheetNames));
-          localStorage.setItem('tpl_config_' + platform, JSON.stringify(defaultConfig));
-          localStorage.setItem('tpl_filename_' + platform, file.name);
-        } catch(e2) {}
-        showToast('⚠️ 模板文件过大，无法保存到浏览器本地。刷新页面后模板将丢失，请重新导入！', 'error');
-      }
+      var rawArray = Array.from(new Uint8Array(arrayBuffer));
+      var sheetNames = wb.SheetNames || ['Sheet1'];
       
-      // V29: 尝试上传模板到 Supabase Storage 作为持久备份
-      if (!tplSaved && sb) {
-        try {
-          var tplBlob = new Blob([new Uint8Array(arrayBuffer)], {type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
-          var tplPath = 'templates/' + platform + '/' + file.name.replace(/[/\\:*?"<>|]/g, '_');
-          var { data: upData, error: upErr } = await sb.storage.from('ecom-assets').upload(tplPath, tplBlob, { upsert: true });
-          if (!upErr) {
-            console.log('模板已备份到 Supabase Storage:', tplPath);
-            localStorage.setItem('tpl_storage_path_' + platform, tplPath);
-            showToast('模板已备份到云端，刷新页面后可自动恢复');
-            tplSaved = true;
-          }
-        } catch(e3) { console.warn('Supabase 模板备份失败:', e3.message); }
-      }
-
-      // 显示字段提取引导 UI（先选 Sheet+行号提取字段，再配置写入参数）
-      showFieldExtractionUI(sheetNames, allSheetData, sheetNames[0], 1, defaultConfig);
-
-      // processTemplate 延迟到用户确认字段提取后再调用
+      // V45: 暂存解析结果，打开保存弹窗
+      window.__pendingTemplate = {
+        filename: file.name,
+        rawArray: rawArray,
+        sheetNames: sheetNames,
+        allSheetData: allSheetData
+      };
+      showTemplateSaveModal();
     } catch (err) {
       console.error('Parse error:', err);
       showToast('文件解析失败：' + (err.message || err), 'error');
     }
   };
+  reader.readAsArrayBuffer(file);
+}
+
+// V45: 模板保存弹窗
+function showTemplateSaveModal() {
+  var pending = window.__pendingTemplate;
+  if (!pending) return;
+  
+  // 填充 Sheet 选择器
+  var sheetOpts = pending.sheetNames.map(function(sn) {
+    var rows = (pending.allSheetData[sn] || []).length;
+    return '<option value="' + escHtml(sn) + '">' + escHtml(sn) + '（' + rows + ' 行）</option>';
+  }).join('');
+  
+  document.getElementById('tplSaveExtSheet').innerHTML = sheetOpts;
+  document.getElementById('tplSaveWriteSheet').innerHTML = sheetOpts;
+  document.getElementById('tplSaveName').value = pending.filename.replace(/\.(xlsx|xls|csv)$/i, '');
+  document.getElementById('tplSaveExtRow').value = 1;
+  document.getElementById('tplSaveWriteRow').value = 6;
+  
+  document.getElementById('templateSaveModal').style.display = 'flex';
+  onTplSaveSheetChange(); // 更新预览
+}
+
+function closeTemplateSaveModal() {
+  document.getElementById('templateSaveModal').style.display = 'none';
+  window.__pendingTemplate = null;
+}
+
+function onTplSaveSheetChange() {
+  var pending = window.__pendingTemplate;
+  if (!pending) return;
+  var sn = document.getElementById('tplSaveExtSheet').value;
+  var rn = parseInt(document.getElementById('tplSaveExtRow').value) || 1;
+  var sheetData = pending.allSheetData[sn] || [];
+  var previewData = sheetData[rn - 1] || [];
+  
+  var totalRows = sheetData.length;
+  var rowInput = document.getElementById('tplSaveExtRow');
+  rowInput.max = Math.max(totalRows, 1);
+  
+  var html = previewData.length > 0
+    ? previewData.map(function(cell, idx) {
+        var text = String(cell != null ? cell : '').trim();
+        return '<div style="display:flex;align-items:flex-start;gap:6px"><span style="color:var(--muted);min-width:24px">' + (idx+1) + '</span><span style="word-break:break-all">' + escHtml(text || '(空)') + '</span></div>';
+      }).join('')
+    : '<div style="color:var(--muted)">该行无数据</div>';
+  document.getElementById('tplSavePreviewContent').innerHTML = html;
+}
+
+async function saveTemplateToLibrary() {
+  var pending = window.__pendingTemplate;
+  if (!pending) return;
+  
+  var platform = state.platform;
+  var name = document.getElementById('tplSaveName').value.trim();
+  if (!name) { showToast('请输入模板名称', 'warn'); return; }
+  
+  var extSheet = document.getElementById('tplSaveExtSheet').value;
+  var extRow = parseInt(document.getElementById('tplSaveExtRow').value) || 1;
+  var writeSheet = document.getElementById('tplSaveWriteSheet').value;
+  var writeRow = parseInt(document.getElementById('tplSaveWriteRow').value) || 6;
+  
+  // 从选中 Sheet 提取数据
+  var sheetData = pending.allSheetData[extSheet] || [];
+  var extractedData = sheetData.slice(extRow - 1);
+  
+  // 生成字段
+  var headerRow = sheetData[extRow - 1] || [];
+  var fields = headerRow.map(function(h, i) {
+    return {
+      name: String(h || '').trim(),
+      colIndex: i,
+      preview: extractedData.slice(0, 3).map(function(r) { return String(r[i] || ''); }).filter(Boolean).join(' / '),
+      mode: 'custom',
+      options: [],
+      fixedValue: '',
+      assoc: ''
+    };
+  }).filter(function(f) { return f.name; });
+  
+  // 构建模板对象
+  var tpl = {
+    id: 'tpl_' + Date.now(),
+    name: name,
+    filename: pending.filename,
+    rawData: pending.rawArray,
+    data: extractedData,
+    fields: fields,
+    sheetNames: pending.sheetNames,
+    config: { sheetName: writeSheet, dataStartRow: writeRow },
+    extractSheet: extSheet,
+    extractRow: extRow,
+    createdAt: new Date().toISOString()
+  };
+  
+  // 添加到模板库
+  if (!state.templateLibrary[platform]) state.templateLibrary[platform] = [];
+  state.templateLibrary[platform].push(tpl);
+  
+  // 持久化
+  syncTemplateLibrary();
+  
+  // 也更新 state.templates（兼容旧代码）
+  state.templates[platform] = tpl;
+  
+  // 设为当前活动模板
+  state.activeTemplateId[platform] = tpl.id;
+  
+  closeTemplateSaveModal();
+  renderTemplateLibrary();
+  updateTemplateSelector();
+  onActiveTemplateChange(); // 自动选中并展开字段配置
+  
+  showToast('✅ 模板「' + name + '」已保存到模板库', 'success');
+}
+
+// V45: 渲染模板库列表
+function renderTemplateLibrary() {
+  var platform = state.platform;
+  var lib = state.templateLibrary[platform] || [];
+  var listEl = document.getElementById('templateLibraryList');
+  if (!listEl) return;
+  
+  if (lib.length === 0) {
+    var names = { shopee: 'Shopee', lazada: 'Lazada', tiktok: 'TikTok Shop' };
+    listEl.innerHTML = '<div class="empty-state" style="padding:30px 10px">' +
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>' +
+      '<p style="font-size:.85rem">暂无模板 · 点击"上传新模板"开始</p>' +
+      '<p style="font-size:.73rem;color:var(--muted)">当前平台：<strong>' + (names[platform] || platform) + '</strong></p>' +
+      '</div>';
+    return;
+  }
+  
+  var activeId = state.activeTemplateId[platform];
+  var html = lib.map(function(tpl) {
+    var isActive = tpl.id === activeId;
+    var sheetInfo = tpl.extractSheet ? '提取: ' + tpl.extractSheet + '(第' + tpl.extractRow + '行)' : '';
+    var writeInfo = tpl.config ? '写入: ' + tpl.config.sheetName + '(第' + tpl.config.dataStartRow + '行)' : '';
+    var dateStr = tpl.createdAt ? new Date(tpl.createdAt).toLocaleDateString('zh-CN') : '';
+    
+    return '<div class="tpl-library-item' + (isActive ? ' active' : '') + '" id="tplItem_' + tpl.id + '">' +
+      '<div class="tpl-icon">📄</div>' +
+      '<div class="tpl-info" onclick="selectActiveTemplate(\'' + tpl.id + '\')">' +
+        '<div class="tpl-name">' + escHtml(tpl.name) + '</div>' +
+        '<div class="tpl-meta">' + escHtml(tpl.filename) + ' · ' + sheetInfo + ' · ' + writeInfo + (dateStr ? ' · ' + dateStr : '') + '</div>' +
+      '</div>' +
+      '<div class="tpl-actions">' +
+        (isActive
+          ? '<span style="font-size:.75rem;color:var(--pri);font-weight:600;padding:4px 8px">✅ 当前使用</span>'
+          : '<button class="btn btn-outline btn-sm" onclick="selectActiveTemplate(\'' + tpl.id + '\')">选择</button>') +
+        '<button class="btn btn-outline btn-sm" onclick="deleteTemplateFromLibrary(\'' + tpl.id + '\')" style="color:#ff4d4f;border-color:#ff4d4f" title="删除模板">🗑</button>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+  
+  listEl.innerHTML = html;
+}
+
+// V45: 删除模板
+function deleteTemplateFromLibrary(id) {
+  var platform = state.platform;
+  var lib = state.templateLibrary[platform] || [];
+  var idx = lib.findIndex(function(t) { return t.id === id; });
+  if (idx === -1) return;
+  
+  var tpl = lib[idx];
+  if (!confirm('确认删除模板「' + tpl.name + '」？\n关联的方案不会受影响，但该模板将不可再用。')) return;
+  
+  lib.splice(idx, 1);
+  
+  if (state.activeTemplateId[platform] === id) {
+    state.activeTemplateId[platform] = '';
+    if (lib.length > 0) {
+      state.activeTemplateId[platform] = lib[0].id;
+      state.templates[platform] = lib[0];
+    } else {
+      state.templates[platform] = null;
+    }
+  }
+  
+  syncTemplateLibrary();
+  renderTemplateLibrary();
+  updateTemplateSelector();
+  if (state.activeTemplateId[platform]) {
+    onActiveTemplateChange();
+  } else {
+    document.getElementById('fieldConfigCard').style.display = 'none';
+    document.getElementById('fieldConfigArea').style.display = 'none';
+    document.getElementById('fieldList').innerHTML = '';
+  }
+  
+  showToast('已删除模板「' + tpl.name + '」', 'info');
+}
+
+// V45: 选择活动模板
+function selectActiveTemplate(id) {
+  var platform = state.platform;
+  var lib = state.templateLibrary[platform] || [];
+  var tpl = lib.find(function(t) { return t.id === id; });
+  if (!tpl) return;
+  
+  state.activeTemplateId[platform] = id;
+  state.templates[platform] = tpl;
+  
+  // 更新 localStorage 兼容旧代码
+  try {
+    var base64 = arrayBufferToBase64(tpl.rawData);
+    localStorage.setItem('tpl_raw_' + platform, base64);
+    localStorage.setItem('tpl_sheets_' + platform, JSON.stringify(tpl.sheetNames));
+    localStorage.setItem('tpl_config_' + platform, JSON.stringify(tpl.config));
+    localStorage.setItem('tpl_filename_' + platform, tpl.filename);
+    localStorage.setItem('tpl_extract_' + platform, JSON.stringify({ sheet: tpl.extractSheet, row: tpl.extractRow }));
+  } catch(e) {}
+  
+  renderTemplateLibrary();
+  updateTemplateSelector();
+  onActiveTemplateChange();
+  
+  showToast('已选择模板「' + tpl.name + '」', 'success');
+}
+
+// V45: 更新字段配置卡片的模板选择器
+function updateTemplateSelector() {
+  var platform = state.platform;
+  var lib = state.templateLibrary[platform] || [];
+  var activeId = state.activeTemplateId[platform];
+  var select = document.getElementById('activeTemplateSelect');
+  if (!select) return;
+  
+  var opts = '<option value="">-- 请选择模板 --</option>';
+  lib.forEach(function(tpl) {
+    var sel = tpl.id === activeId ? ' selected' : '';
+    opts += '<option value="' + tpl.id + '"' + sel + '>' + escHtml(tpl.name) + ' (' + escHtml(tpl.filename) + ')</option>';
+  });
+  select.innerHTML = opts;
+}
+
+// V45: 模板选择器变更
+function onActiveTemplateChange() {
+  var platform = state.platform;
+  var select = document.getElementById('activeTemplateSelect');
+  var infoEl = document.getElementById('activeTemplateInfo');
+  var configArea = document.getElementById('fieldConfigArea');
+  var fc = document.getElementById('fieldConfigCard');
+  
+  var id = select ? select.value : '';
+  if (!id && state.activeTemplateId[platform]) {
+    id = state.activeTemplateId[platform];
+    select.value = id;
+  }
+  
+  if (!id) {
+    if (infoEl) infoEl.textContent = '请先在模板库中选择一个模板';
+    if (configArea) configArea.style.display = 'none';
+    fc.style.display = 'none';
+    document.getElementById('fieldList').innerHTML = '';
+    return;
+  }
+  
+  var lib = state.templateLibrary[platform] || [];
+  var tpl = lib.find(function(t) { return t.id === id; });
+  if (!tpl) {
+    showToast('模板不存在，请重新选择', 'error');
+    return;
+  }
+  
+  state.activeTemplateId[platform] = id;
+  state.templates[platform] = tpl;
+  
+  // 更新 localStorage 兼容
+  try {
+    localStorage.setItem('tpl_raw_' + platform, arrayBufferToBase64(tpl.rawData));
+    localStorage.setItem('tpl_sheets_' + platform, JSON.stringify(tpl.sheetNames));
+    localStorage.setItem('tpl_config_' + platform, JSON.stringify(tpl.config));
+    localStorage.setItem('tpl_filename_' + platform, tpl.filename);
+  } catch(e) {}
+  
+  if (infoEl) infoEl.textContent = tpl.extractSheet 
+    ? '提取参考：' + tpl.extractSheet + '第' + tpl.extractRow + '行 | 写入：' + tpl.config.sheetName + '第' + tpl.config.dataStartRow + '行'
+    : '';
+  
+  fc.style.display = 'block';
+  if (configArea) configArea.style.display = 'block';
+  
+  // 加载字段配置：优先方案配置，否则模板字段
+  var usingScheme = false;
+  if (state.currentSchemeId[platform]) {
+    var schemes = state.configSchemes[platform] || [];
+    var scheme = schemes.find(function(s) { return s.id == state.currentSchemeId[platform]; });
+    if (scheme && scheme.field_configs) {
+      state.fieldConfigs[platform] = scheme.field_configs;
+      usingScheme = true;
+    }
+  }
+  if (!usingScheme) {
+    state.fieldConfigs[platform] = tpl.fields || [];
+  }
+  
+  renderFieldList();
+  updateCurrentSchemeBadge();
+  renderTemplateLibrary(); // 同步高亮
   reader.readAsArrayBuffer(file);
 }
 
@@ -1868,7 +2205,6 @@ async function getTemplateRawData(platform) {
 
 function handleDrop(e) {
   e.preventDefault();
-  document.getElementById('uploadZone').classList.remove('dragover');
   const file = e.dataTransfer.files[0];
   if (!file) return;
   const input = document.getElementById('templateFile');
@@ -1876,6 +2212,64 @@ function handleDrop(e) {
   dt.items.add(file);
   input.files = dt.files;
   handleTemplateImport(input);
+}
+
+// V45: 模板库持久化
+function syncTemplateLibrary() {
+  try {
+    // 为每个模板生成 base64 rawData 用于 localStorage
+    var libForStore = {};
+    ['shopee', 'lazada', 'tiktok'].forEach(function(plat) {
+      libForStore[plat] = (state.templateLibrary[plat] || []).map(function(tpl) {
+        return {
+          id: tpl.id, name: tpl.name, filename: tpl.filename,
+          sheetNames: tpl.sheetNames, config: tpl.config,
+          extractSheet: tpl.extractSheet, extractRow: tpl.extractRow,
+          fields: tpl.fields, data: tpl.data,
+          rawData_base64: tpl.rawData ? arrayBufferToBase64(tpl.rawData) : '',
+          createdAt: tpl.createdAt
+        };
+      });
+    });
+    localStorage.setItem('ecom_template_library', JSON.stringify(libForStore));
+    localStorage.setItem('ecom_active_template', JSON.stringify(state.activeTemplateId));
+  } catch(e) {
+    console.warn('Template library sync failed:', e.message);
+  }
+}
+
+function loadTemplateLibrary() {
+  try {
+    var saved = localStorage.getItem('ecom_template_library');
+    if (saved) {
+      var lib = JSON.parse(saved);
+      ['shopee', 'lazada', 'tiktok'].forEach(function(plat) {
+        state.templateLibrary[plat] = (lib[plat] || []).map(function(tpl) {
+          return {
+            id: tpl.id, name: tpl.name, filename: tpl.filename,
+            sheetNames: tpl.sheetNames, config: tpl.config,
+            extractSheet: tpl.extractSheet, extractRow: tpl.extractRow,
+            fields: tpl.fields || [], data: tpl.data || [],
+            rawData: tpl.rawData_base64 ? Array.from(new Uint8Array(base64ToArrayBuffer(tpl.rawData_base64))) : null,
+            createdAt: tpl.createdAt
+          };
+        });
+      });
+    }
+    var active = localStorage.getItem('ecom_active_template');
+    if (active) {
+      try {
+        var a = JSON.parse(active);
+        Object.keys(a).forEach(function(plat) {
+          state.activeTemplateId[plat] = a[plat] || '';
+        });
+      } catch(e) {}
+    }
+    console.log('Template library loaded:', 
+      state.templateLibrary.shopee.length + '/' + state.templateLibrary.lazada.length + '/' + state.templateLibrary.tiktok.length);
+  } catch(e) {
+    console.warn('Template library load failed:', e.message);
+  }
 }
 
 function processTemplate(data, filename) {
@@ -2198,6 +2592,7 @@ async function saveAsScheme() {
     platform,
     scheme_name: name,
     template_filename: tpl.filename || null,
+    template_library_id: state.activeTemplateId[platform] || '',  // V45
     template_headers: tpl.data?.[0] || [],
     template_data: tpl.data?.slice(0, 5) || [],
     template_rawdata: templateRawData || null,
@@ -2294,10 +2689,42 @@ function loadSchemeById(id) {
   state.templates[platform] = tpl;
   state.currentSchemeName[platform] = scheme.scheme_name;
   state.currentSchemeId[platform] = scheme.id;
+  
+  // V45: 关联模板库
+  if (scheme.template_library_id) {
+    var libTpl = (state.templateLibrary[platform] || []).find(function(t) { return t.id === scheme.template_library_id; });
+    if (libTpl) {
+      state.activeTemplateId[platform] = libTpl.id;
+      state.templates[platform] = libTpl; // 用库中的完整模板
+    }
+  }
+  if (!state.activeTemplateId[platform] && rawDataBase64) {
+    // 方案有模板但不在库中，自动添加到库
+    var newLibTpl = {
+      id: 'tpl_' + Date.now(),
+      name: scheme.scheme_name + ' (来自方案)',
+      filename: tpl.filename || 'unknown.xlsx',
+      rawData: tpl.rawData,
+      data: tpl.data || [],
+      fields: scheme.field_configs || [],
+      sheetNames: tpl.sheetNames || [],
+      config: tpl.config || { sheetName: 'Sheet1', dataStartRow: 6 },
+      extractSheet: tpl.extractSheet || '',
+      extractRow: tpl.extractRow || 1,
+      createdAt: new Date().toISOString()
+    };
+    if (!state.templateLibrary[platform]) state.templateLibrary[platform] = [];
+    state.templateLibrary[platform].push(newLibTpl);
+    state.activeTemplateId[platform] = newLibTpl.id;
+    state.templates[platform] = newLibTpl;
+    syncTemplateLibrary();
+  }
+  renderTemplateLibrary();
+  updateTemplateSelector();
   updateCurrentSchemeBadge();
   renderFieldList();
   document.getElementById('fieldConfigCard').style.display = 'block';
-  document.getElementById('uploadZone').style.display = 'none';
+  document.getElementById('fieldConfigArea').style.display = 'block';
   document.getElementById('importedFileName').textContent = '✓ ' + (scheme.template_filename || '方案模板')
     + (rawDataBase64 ? ' 📎含模板' : '');
   closeSchemeManager();
@@ -4725,14 +5152,23 @@ async function loadDraft() {
     }
   } catch(_) {}
   // 恢复当前平台 UI
-  if (state.fieldConfigs[state.platform]?.length > 0) {
-    document.getElementById('fieldConfigCard').style.display = 'block';
-    document.getElementById('uploadZone').style.display = 'none';
-    const tpl = state.templates[state.platform];
+  var fc = document.getElementById('fieldConfigCard');
+  var activeId = state.activeTemplateId[state.platform];
+  var lib = state.templateLibrary[state.platform] || [];
+  var hasActiveTpl = activeId && lib.some(function(t) { return t.id === activeId; });
+  
+  if (state.fieldConfigs[state.platform]?.length > 0 || hasActiveTpl) {
+    fc.style.display = 'block';
+    if (state.fieldConfigs[state.platform]?.length > 0) {
+      document.getElementById('fieldConfigArea').style.display = 'block';
+    }
+    var tpl = state.templates[state.platform];
     if (tpl) {
       document.getElementById('importedFileName').textContent = '✓ ' + (tpl.filename || '云端模板');
     }
   }
+  renderTemplateLibrary();
+  updateTemplateSelector();
   renderFieldList();
   renderProductList();
   updateProductBadge();
@@ -4774,11 +5210,17 @@ async function clearAllData() {
   state.exportRecords = [];
   updateExportRecordBadge();
   state.currentProductIdx = -1;
+  state.templateLibrary = { shopee:[], lazada:[], tiktok:[] };
+  state.activeTemplateId = { shopee:'', lazada:'', tiktok:'' };
+  localStorage.removeItem('ecom_template_library');
+  localStorage.removeItem('ecom_active_template');
   localStorage.removeItem('ecom_fallback');
   renderProductList(); renderFieldList(); updateProductBadge();
   updateCurrentSchemeBadge();
-  document.getElementById('uploadZone').style.display = '';
   document.getElementById('fieldConfigCard').style.display = 'none';
+  document.getElementById('fieldConfigArea').style.display = 'none';
+  renderTemplateLibrary();
+  updateTemplateSelector();
   document.getElementById('importedFileName').textContent = '';
   document.getElementById('productFormWrap').innerHTML = '<div class="empty-state"><p>请新增产品</p></div>';
   showToast('所有数据已从云端清空', 'success');
@@ -4802,7 +5244,7 @@ function importConfig(input) {
         renderFieldList();
         if (state.fieldConfigs[state.platform]?.length > 0) {
           document.getElementById('fieldConfigCard').style.display = 'block';
-          document.getElementById('uploadZone').style.display = 'none';
+          document.getElementById('fieldConfigArea').style.display = 'block';
         }
         showToast('字段配置导入成功', 'success');
       }
@@ -7201,9 +7643,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   restoreTemplateFromLocalStorage();
   loadTitlePartDefs();
   document.querySelectorAll('.toast').forEach(t => t.remove());
-  document.getElementById('uploadZone').addEventListener('click', () => {
-    document.getElementById('templateFile').click();
-  });
   // 设置去水印页面的拖拽上传
   setupWmDragDrop();
   // 设置图片裁剪页面的拖拽上传
