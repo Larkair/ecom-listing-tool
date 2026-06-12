@@ -1360,13 +1360,13 @@ function restoreTemplateFromLocalStorage() {
     if (existingRawData && existingRawData.length > 0) {
       console.log('📦 restoreTemplateFromLocalStorage: ' + platform + ' 已有 rawData(' + existingRawData.length + ' bytes)，跳过 localStorage 恢复');
       // 但有 sheetNames/config 可以补充
-      var sheetsStr = localStorage.getItem('tpl_sheets_' + platform);
-      var configStr = localStorage.getItem('tpl_config_' + platform);
-      if (sheetsStr && !state.templates[platform].sheetNames) {
-        try { state.templates[platform].sheetNames = JSON.parse(sheetsStr); } catch(e) {}
+      var sheetStr_ = localStorage.getItem('tpl_sheets_' + platform);
+      var configStr_ = localStorage.getItem('tpl_config_' + platform);
+      if (sheetStr_ && !state.templates[platform].sheetNames) {
+        try { state.templates[platform].sheetNames = JSON.parse(sheetStr_); } catch(e) {}
       }
-      if (configStr && !state.templates[platform].config) {
-        try { state.templates[platform].config = JSON.parse(configStr); } catch(e) {}
+      if (configStr_ && !state.templates[platform].config) {
+        try { state.templates[platform].config = JSON.parse(configStr_); } catch(e) {}
       }
       return; // 不覆盖
     }
