@@ -6955,6 +6955,13 @@ function setupLoDrag(idx) {
         bi2.logoW = newW; bi2.logoH = newH;
       }
 
+      // 限制LOGO不超出底图区域
+      var loRect = getLoBgRenderRect(idx);
+      if (bi2.logoX < loRect.left) bi2.logoX = loRect.left;
+      if (bi2.logoY < loRect.top) bi2.logoY = loRect.top;
+      if (bi2.logoX + bi2.logoW > loRect.left + loRect.w) bi2.logoX = loRect.left + loRect.w - bi2.logoW;
+      if (bi2.logoY + bi2.logoH > loRect.top + loRect.h) bi2.logoY = loRect.top + loRect.h - bi2.logoH;
+
       updateLoOverlayPos(idx);
 
       // 同步到所有图
