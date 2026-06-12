@@ -470,6 +470,7 @@
     .scheme-selector .scheme-item.selected { border-color: var(--pri); background: var(--pri-l); }
     .current-scheme-badge { display: inline-flex; align-items: center; gap: 4px; background: #d1fae5; 
                             color: #059669; font-size: .75rem; padding: 2px 8px; border-radius: 4px; font-weight: 600; }
+    .scheme-item-new:hover { box-shadow: 0 0 0 2px rgba(22,119,255,.25); transform: translateY(-1px); }
 
     @media (max-width: 768px) {
       .sidebar { display: none; }
@@ -1154,7 +1155,7 @@ const MAX_IMG_PER_GROUP = 9;
 // =============================================
 // Supabase 初始化（容错：CDN 加载失败不影响核心功能）
 // =============================================
-console.log('🛠 批量上架工具 V46 | 2026-06-12 | 图片+LOGO导出修复(显示元数据持久化) | 字段配置多模板 | Telea FMM | JSZip');
+console.log('🛠 批量上架工具 V46 | 2026-06-12 | 方案管理+新方案选项 | 导出元数据持久化 | Telea FMM | JSZip');
 // =============================================
 const SUPABASE_URL = 'https://khrppyhcjzkkokyhnhhd.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtocnBweWhjanpra29reWhuaGhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwNzY1NDEsImV4cCI6MjA5NjY1MjU0MX0.uS9YablBNwjUmQlwRbLRw3SEPNgEnO1Uc6Poe1SeB88';
@@ -1924,7 +1925,6 @@ function onActiveTemplateChange() {
   renderFieldList();
   updateCurrentSchemeBadge();
   renderTemplateLibrary(); // 同步高亮
-  reader.readAsArrayBuffer(file);
 }
 
 
@@ -2531,14 +2531,58 @@ function closeSchemeManager() {
   document.getElementById('schemeManagerModal').classList.remove('open');
 }
 
+// V46: 清除当前方案，允许自由选择模板配置
+function clearCurrentScheme() {
+  var platform = state.platform;
+  state.currentSchemeId[platform] = null;
+  state.currentSchemeName[platform] = null;
+  state.fieldConfigs[platform] = [];
+  
+  // 重置模板选择器
+  var select = document.getElementById('activeTemplateSelect');
+  if (select) {
+    select.value = '';
+  }
+  
+  // 隐藏字段配置区域
+  var configArea = document.getElementById('fieldConfigArea');
+  if (configArea) configArea.style.display = 'none';
+  
+  // 清空字段列表
+  var flEl = document.getElementById('fieldList');
+  if (flEl) flEl.innerHTML = '';
+  
+  // 更新方案徽章
+  updateCurrentSchemeBadge();
+  
+  // 关闭弹窗
+  closeSchemeManager();
+  
+  showToast('✅ 已清除方案，请重新选择模板配置字段', 'success');
+}
+
 function renderSchemeList() {
   const schemes = state.configSchemes[state.platform];
   const container = document.getElementById('schemeListContainer');
+  
+  // V46: "新方案"选项 — 清除当前方案，允许自由选择模板
+  var newSchemeHtml = '';
+  if (schemes && schemes.length > 0) {
+    newSchemeHtml = '<div class="scheme-item scheme-item-new" onclick="clearCurrentScheme()" style="cursor:pointer;border:2px dashed var(--pri);border-radius:8px;margin-bottom:12px;background:linear-gradient(135deg,#f0f7ff,#faf5ff)">' +
+      '<div class="sicon" style="background:linear-gradient(135deg,#1677ff,#722ed1);color:#fff;font-size:1.2rem">🆕</div>' +
+      '<div class="sinfo">' +
+        '<div class="sname" style="color:var(--pri);font-weight:700">新方案</div>' +
+        '<div class="smeta">清除当前方案，重新选择模板配置字段</div>' +
+      '</div>' +
+      '<span style="color:var(--pri);font-weight:600;font-size:.8rem">开始 →</span>' +
+    '</div>';
+  }
+  
   if (!schemes || schemes.length === 0) {
-    container.innerHTML = '<p class="text-sm text-muted" style="padding:20px;text-align:center">暂无方案，输入名称后点击「另存为方案」</p>';
+    container.innerHTML = newSchemeHtml + '<p class="text-sm text-muted" style="padding:20px;text-align:center">暂无方案，输入名称后点击「另存为方案」</p>';
     return;
   }
-  container.innerHTML = schemes.map((s, i) => {
+  container.innerHTML = newSchemeHtml + schemes.map((s, i) => {
     const isCurrent = s.scheme_name === state.currentSchemeName[state.platform];
     const hasTemplate = !!(s.template_rawdata);
     var tplMeta = {};
