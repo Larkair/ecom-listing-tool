@@ -3443,13 +3443,15 @@ async function refreshPreview() {
 // 以模板文件为基底导出（保留所有 sheet 和格式）
 // =============================================
 async function exportExcelWithTemplate() {
-  const platform = state.platform;
-  const tpl = state.templates[platform];
-  const config = tpl?.config;
+  var platform = state.platform;
+  // V39: 优先使用产品关联的方案模板
+  var tpl = resolveExportTemplate(platform);
+  if (!tpl) { showToast('无法解析导出模板', 'error'); return false; }
+  var config = tpl.config;
   if (!config) { showToast('请先配置模板写入参数（目标Sheet+起始行）', 'warn'); return false; }
   
   console.log('📤 exportExcelWithTemplate: config=', JSON.stringify(config), 'platform=', platform);
-  console.log('📤 state.templates[' + platform + '] keys:', tpl ? Object.keys(tpl).join(', ') : 'null');
+  console.log('📤 resolveExportTemplate keys:', tpl ? Object.keys(tpl).join(', ') : 'null');
   console.log('📤 rawData type:', tpl && tpl.rawData ? (Array.isArray(tpl.rawData) ? 'Array(' + tpl.rawData.length + ')' : typeof tpl.rawData) : 'null');
   console.log('📤 模板文件名:', tpl?.filename || '(未知)');
   
@@ -3631,8 +3633,11 @@ async function exportExcelWithTemplate() {
 
 // 备用导出（XLSX 方式，无格式保留，仅保留数据）
 async function exportExcelWithTemplateFallback() {
-  const platform = state.platform;
-  const config = state.templates[platform]?.config;
+  var platform = state.platform;
+  // V39: 优先使用产品关联的方案模板
+  var tpl = resolveExportTemplate(platform);
+  var config = tpl?.config;
+  if (!config) { showToast('无法获取模板配置', 'error'); return false; }
   const rawData = await getTemplateRawData(platform);
   if (!rawData) { showToast('模板文件已丢失', 'error'); return false; }
   
@@ -3891,9 +3896,79 @@ function updateExportRecordBadge() {
   }
 }
 
+// V39: 根据产品关联的方案解析导出模板（而非直接使用当前模板）
+function resolveExportTemplate(platform) {
+  var products = state.products[platform] || [];
+  // 收集所有产品关联的方案ID
+  var schemeIds = new Set();
+  products.forEach(function(p) {
+    if (p.configSchemeId) schemeIds.add(p.configSchemeId);
+  });
+
+  // 如果产品有明确关联的方案，优先使用方案的模板
+  if (schemeIds.size > 0) {
+    var schemes = state.configSchemes[platform] || [];
+    // 优先使用第一个产品的方案（如果所有产品方案一致，就用那个）
+    var targetSchemeId = products[0]?.configSchemeId;
+    var scheme = schemes.find(function(s) { return s.id === targetSchemeId; });
+
+    if (!scheme && schemeIds.size === 1) {
+      // 第一个产品可能没 schemeId but 其他产品有
+      targetSchemeId = Array.from(schemeIds)[0];
+      scheme = schemes.find(function(s) { return s.id === targetSchemeId; });
+    }
+
+    if (scheme && scheme.template_rawdata) {
+      console.log('📤 从方案「' + scheme.scheme_name + '」获取模板 rawData, 长度=' + (scheme.template_rawdata||'').length);
+      // 解析 template_meta
+      var meta = {};
+      try {
+        meta = (scheme.template_meta && typeof scheme.template_meta === 'string')
+          ? JSON.parse(scheme.template_meta)
+          : (scheme.template_meta || {});
+      } catch(e) { meta = {}; }
+
+      // 构建模板对象
+      var resolvedTpl = {
+        filename: scheme.template_filename || '',
+        data: scheme.template_data || [],
+        fields: scheme.field_configs || [],
+        sheetNames: meta.sheetNames || [],
+        config: meta.config || { sheetName: 'Sheet1', dataStartRow: 6 },
+        extractSheet: meta.extractSheet || '',
+        extractRow: meta.extractRow || 1,
+        rawData: null // 下面填充
+      };
+
+      // 将 base64 rawData 转为 Array 格式（与 state.templates[].rawData 一致）
+      try {
+        var rawBuf = base64ToArrayBuffer(scheme.template_rawdata);
+        resolvedTpl.rawData = Array.from(new Uint8Array(rawBuf));
+        // 同时写入 localStorage 以确保 getTemplateRawData 能找到
+        localStorage.setItem('tpl_raw_' + platform, scheme.template_rawdata);
+        localStorage.setItem('tpl_sheets_' + platform, JSON.stringify(resolvedTpl.sheetNames));
+        localStorage.setItem('tpl_config_' + platform, JSON.stringify(resolvedTpl.config));
+        if (resolvedTpl.extractSheet || resolvedTpl.extractRow) {
+          localStorage.setItem('tpl_extract_' + platform, JSON.stringify({ sheet: resolvedTpl.extractSheet, row: resolvedTpl.extractRow }));
+        }
+      } catch(e) {
+        console.warn('解析方案 template_rawdata 失败:', e.message);
+        return null;
+      }
+
+      return resolvedTpl;
+    }
+  }
+
+  // 回退：使用当前平台模板
+  return state.templates[platform] || null;
+}
+
 async function exportExcel() {
-  // 新增：如果有模板文件，以模板为基底导出（保留所有 sheet）
-  const tpl = state.templates[state.platform];
+  // V39: 优先使用产品关联的方案模板，而非当前平台模板
+  var platform = state.platform;
+  var tpl = resolveExportTemplate(platform);
+
   console.log('📤 exportExcel: tpl=', !!tpl, 'tpl.rawData=', !!(tpl && tpl.rawData),
     'rawDataLen=', (tpl && tpl.rawData && tpl.rawData.length) || 0);
   if (tpl && tpl.rawData) {
