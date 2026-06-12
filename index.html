@@ -792,6 +792,43 @@
       </div>
     </div>
 
+    <!-- ====== 去水印导出设置弹窗 ====== -->
+    <div class="modal-overlay" id="wmExportModal">
+      <div class="modal" style="width:460px">
+        <div class="modal-header">
+          <div class="modal-title">💾 去水印导出设置</div>
+          <button class="modal-close" onclick="closeWmExportModal()">×</button>
+        </div>
+        <div style="padding:4px 0">
+          <div class="form-group">
+            <label class="form-label">图片格式</label>
+            <select class="form-ctrl" id="wmExportFormat">
+              <option value="image/png">PNG（无损，文件较大）</option>
+              <option value="image/jpeg">JPEG（有损压缩，文件小）</option>
+              <option value="image/webp">WebP（兼顾质量与体积）</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">图片大小限制</label>
+            <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+              <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:.85rem">
+                <input type="radio" name="wmSizeLimit" value="none" checked onchange="toggleWmSizeInput()" /> 不限制大小
+              </label>
+              <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:.85rem">
+                <input type="radio" name="wmSizeLimit" value="limit" onchange="toggleWmSizeInput()" /> 限制不超过
+              </label>
+              <input type="number" class="form-ctrl" id="wmSizeLimitMB" value="1" min="0.1" max="20" step="0.1" style="width:80px" disabled /> <span style="font-size:.85rem">MB</span>
+            </div>
+            <p class="text-sm text-muted" style="margin-top:6px">选择限制后，系统会自动压缩图片使其接近但不超出限制</p>
+          </div>
+        </div>
+        <div style="margin-top:16px;text-align:right;display:flex;gap:8px;justify-content:flex-end">
+          <button class="btn btn-outline" onclick="closeWmExportModal()">取消</button>
+          <button class="btn btn-primary" onclick="doExportWmImages()">✅ 确认导出</button>
+        </div>
+      </div>
+    </div>
+
     <!-- ====== 导出记录弹窗 ====== -->
     <div class="modal-overlay" id="exportRecordsModal">
       <div class="modal" style="width:560px;max-height:80vh;overflow-y:auto">
@@ -860,7 +897,7 @@ const MAX_IMG_PER_GROUP = 9;
 // =============================================
 // Supabase 初始化（容错：CDN 加载失败不影响核心功能）
 // =============================================
-console.log('🛠 批量上架工具 V30 | 2026-06-11 | Telea FMM修复算法 | JSZip打包导出');
+console.log('🛠 批量上架工具 V42 | 2026-06-12 | 去水印导出弹窗+裁剪框对齐修复 | Telea FMM | JSZip');
 // =============================================
 const SUPABASE_URL = 'https://khrppyhcjzkkokyhnhhd.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtocnBweWhjanpra29reWhuaGhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwNzY1NDEsImV4cCI6MjA5NjY1MjU0MX0.uS9YablBNwjUmQlwRbLRw3SEPNgEnO1Uc6Poe1SeB88';
@@ -5062,39 +5099,102 @@ function inpaintDirectSimple(srcData, maskData, width, height, roi) {
 }
 
 
-// 导出图片（JSZip打包单文件下载，无需多次选择存储位置）
-async function exportWmImages() {
+// V42: 去水印导出 — 先弹窗选择格式/大小
+function exportWmImages() {
   var hasProcessed = false;
   wmState.images.forEach(function(item) { if (item.processed) hasProcessed = true; });
   if (!hasProcessed) { showToast('请先执行"批量去水印"', 'warn'); return; }
 
-  if (typeof JSZip === 'undefined') {
-    // JSZip 未加载，回退到逐个下载
-    showToast('JSZip 未加载，使用逐个下载模式', 'warn');
-    exportWmImagesFallback();
+  // 重置弹窗默认值（每次打开都重置）
+  document.getElementById('wmExportFormat').value = 'image/png';
+  document.querySelector('input[name="wmSizeLimit"][value="none"]').checked = true;
+  document.getElementById('wmSizeLimitMB').value = '1';
+  document.getElementById('wmSizeLimitMB').disabled = true;
+  document.getElementById('wmExportModal').classList.add('open');
+}
+
+function closeWmExportModal() {
+  document.getElementById('wmExportModal').classList.remove('open');
+}
+
+function toggleWmSizeInput() {
+  var limitRadio = document.querySelector('input[name="wmSizeLimit"][value="limit"]');
+  document.getElementById('wmSizeLimitMB').disabled = !limitRadio.checked;
+}
+
+// dataURL → Canvas
+function _dataUrlToCanvas(dataUrl) {
+  return new Promise(function(resolve, reject) {
+    var img = new Image();
+    img.onload = function() {
+      var c = document.createElement('canvas');
+      c.width = img.width;
+      c.height = img.height;
+      c.getContext('2d').drawImage(img, 0, 0);
+      resolve(c);
+    };
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
+}
+
+// V42: 确认去水印导出（带格式/大小选择）
+async function doExportWmImages() {
+  closeWmExportModal();
+
+  var format = document.getElementById('wmExportFormat').value;
+  var ext = _beFormatExt(format);
+  var limitRadio = document.querySelector('input[name="wmSizeLimit"][value="limit"]');
+  var sizeLimitMB = limitRadio.checked ? parseFloat(document.getElementById('wmSizeLimitMB').value) || 1 : 0;
+  var maxBytes = sizeLimitMB > 0 ? sizeLimitMB * 1024 * 1024 : 0;
+
+  // 收集已处理图片
+  var items = [];
+  wmState.images.forEach(function(item) {
+    if (item.processed && item.processedUrl) items.push(item);
+  });
+  if (items.length === 0) {
+    showToast('没有可导出的图片', 'warn');
     return;
   }
+
+  if (typeof JSZip === 'undefined') {
+    showToast('JSZip 未加载，使用逐个下载模式', 'warn');
+    _exportWmImagesFallback(items, format, ext, maxBytes);
+    return;
+  }
+
+  showToast('正在压缩打包 ' + items.length + ' 张图片…', 'info');
 
   var zip = new JSZip();
   var nameCount = {};
   var exportCount = 0;
 
-  wmState.images.forEach(function(item) {
-    if (!item.processed || !item.processedUrl) return;
+  // 逐张处理
+  for (var i = 0; i < items.length; i++) {
+    var item = items[i];
+    var canvas = await _dataUrlToCanvas(item.processedUrl);
 
     var dotIdx = item.name.lastIndexOf('.');
     var baseName = dotIdx > 0 ? item.name.substring(0, dotIdx) : item.name;
-    var ext = dotIdx > 0 ? item.name.substring(dotIdx) : '.png';
 
     if (!nameCount[baseName]) nameCount[baseName] = 0;
     nameCount[baseName]++;
     var newName = baseName + '(' + nameCount[baseName] + ')' + ext;
 
-    // 从 dataURL 提取 base64 数据
-    var base64Data = item.processedUrl.split(',')[1];
-    zip.file(newName, base64Data, { base64: true });
+    var blob;
+    if (maxBytes > 0) {
+      var result = await _compressCanvasToSize(canvas, format, maxBytes);
+      blob = result.blob;
+    } else {
+      var quality = format === 'image/png' ? undefined : 0.92;
+      blob = await _canvasToBlob(canvas, format, quality);
+    }
+
+    var arrayBuffer = await blob.arrayBuffer();
+    zip.file(newName, new Uint8Array(arrayBuffer), { binary: true });
     exportCount++;
-  });
+  }
 
   if (exportCount === 0) {
     showToast('没有可导出的图片', 'warn');
@@ -5102,45 +5202,40 @@ async function exportWmImages() {
   }
 
   try {
-    var blob = await zip.generateAsync({
-      type: 'blob',
-      compression: 'STORE'  // PNG 已压缩，不再压以提速
-    });
-
-    var url = URL.createObjectURL(blob);
+    var zipBlob = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
+    var url = URL.createObjectURL(zipBlob);
     var a = document.createElement('a');
     a.href = url;
-    a.download = '去水印图片_' + exportCount + '张.zip';
+    var fmtLabel = format.split('/')[1].toUpperCase();
+    var sizeLabel = maxBytes > 0 ? ('_≤' + sizeLimitMB + 'MB') : '';
+    a.download = '去水印图片_' + fmtLabel + sizeLabel + '_' + exportCount + '张.zip';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
 
-    showToast('✅ 已打包导出 ' + exportCount + ' 张图片（单文件ZIP，无需逐个选择位置）', 'success');
+    var sizeInfo = maxBytes > 0 ? ('（≤' + sizeLimitMB + 'MB）') : '';
+    showToast('✅ 已打包导出 ' + exportCount + ' 张 ' + fmtLabel + ' 图片' + sizeInfo, 'success');
   } catch (err) {
     console.error('ZIP打包失败:', err);
-    exportWmImagesFallback();
+    _exportWmImagesFallback(items, format, ext, maxBytes);
   }
 }
 
-// 回退：逐个下载
-function exportWmImagesFallback() {
+// 去水印回退：逐个下载
+function _exportWmImagesFallback(items, format, ext, maxBytes) {
   var exportCount = 0;
   var nameCount = {};
 
-  wmState.images.forEach(function(item, idx) {
-    if (!item.processed || !item.processedUrl) return;
-
+  items.forEach(function(item, i) {
+    // 逐个下载模式：用高质量导出
+    var a = document.createElement('a');
+    a.href = item.processedUrl;
     var dotIdx = item.name.lastIndexOf('.');
     var baseName = dotIdx > 0 ? item.name.substring(0, dotIdx) : item.name;
-    var ext = dotIdx > 0 ? item.name.substring(dotIdx) : '.png';
-
     if (!nameCount[baseName]) nameCount[baseName] = 0;
     nameCount[baseName]++;
     var newName = baseName + '(' + nameCount[baseName] + ')' + ext;
-
-    var a = document.createElement('a');
-    a.href = item.processedUrl;
     a.download = newName;
     document.body.appendChild(a);
     setTimeout(function() {
@@ -5486,10 +5581,17 @@ function beCrop(idx) {
 }
 
 
-// V38: 裁剪框拖动 → 实时更新输入框像素
+// V42: 裁剪框拖动 → 实时更新输入框像素（使用实际画布显示尺寸做鼠标→像素换算）
 function setupCropDrag(overlay, origW, origH, scale) {
   var cropOvl = overlay.querySelector('#beCropOverlay');
+  var previewCanvas = overlay.querySelector('#beCropPreview');
   if (!cropOvl) return;
+
+  // V42: 获取画布实际CSS渲染尺寸，用于精确的鼠标→图像像素转换
+  function getDisplayScale() {
+    var r = previewCanvas.getBoundingClientRect();
+    return { displayScaleX: r.width / origW, displayScaleY: r.height / origH };
+  }
 
   var dragMode = null; // 'move' | 'nw'|'n'|'ne'|'e'|'se'|'s'|'sw'|'w'
   var dragStartX, dragStartY;
@@ -5528,14 +5630,17 @@ function setupCropDrag(overlay, origW, origH, scale) {
     }
     e.preventDefault();
     e.stopPropagation();
+    var ds = getDisplayScale();
     dragStartX = e.clientX;
     dragStartY = e.clientY;
     var px = readPixels();
     initTop = px.top; initRight = px.right; initBottom = px.bottom; initLeft = px.left;
 
     function onMove(ev) {
-      var dx = (ev.clientX - dragStartX) / scale;
-      var dy = (ev.clientY - dragStartY) / scale;
+      // V42: 使用实际画布显示尺寸做精确换算（fix: max-width:100% CSS缩放后坐标系偏移）
+      var ds2 = getDisplayScale();
+      var dx = (ev.clientX - dragStartX) / (ds2.displayScaleX || scale);
+      var dy = (ev.clientY - dragStartY) / (ds2.displayScaleY || scale);
       var newTop = initTop, newRight = initRight, newBottom = initBottom, newLeft = initLeft;
 
       switch (dragMode) {
@@ -5597,10 +5702,12 @@ function updateBeCropPreview(origW, origH, scale) {
 
   var overlay = document.querySelector('#beCropOverlay');
   if (overlay) {
-    overlay.style.top = Math.round(top * scale) + 'px';
-    overlay.style.left = Math.round(left * scale) + 'px';
-    overlay.style.width = Math.round(resultW * scale) + 'px';
-    overlay.style.height = Math.round(resultH * scale) + 'px';
+    // V42: 使用百分比定位代替绝对px值，确保 overlay 始终与 canvas 对齐
+    // （修复 max-width:100% 导致 canvas CSS 渲染尺寸与 HTML 属性尺寸不同时的错位问题）
+    overlay.style.top = (top / origH * 100) + '%';
+    overlay.style.left = (left / origW * 100) + '%';
+    overlay.style.width = (resultW / origW * 100) + '%';
+    overlay.style.height = (resultH / origH * 100) + '%';
     overlay.style.background = resultW > 0 && resultH > 0
       ? 'rgba(22,119,255,0.08)'
       : 'rgba(255,0,0,0.15)';
