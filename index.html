@@ -1552,8 +1552,9 @@ function switchPlatform(platform, btn) {
     if (fc) fc.style.display = 'block';
     var faEl2 = document.getElementById('fieldConfigArea');
     if (faEl2) faEl2.style.display = 'block';
-  } else if (lib.length > 0) {
-    // 有模板但未选中
+  } else if (lib.length > 0 && !activeId) {
+    // V46 fix: 有模板但未选中活动模板时，也设为第一个可用模板（确保导出有回退）
+    state.templates[platform] = lib[0];
     if (fc) fc.style.display = 'block';
     var faEl3 = document.getElementById('fieldConfigArea');
     if (faEl3) faEl3.style.display = 'none';
@@ -5017,6 +5018,18 @@ function resolveExportTemplate(platform) {
   // 回退：使用当前平台模板
   console.log('  🔄 回退: 使用 state.templates[' + platform + ']');
   console.log('  当前模板:', currentTpl ? (currentTpl.filename || '(无文件名)') : 'null');
+  
+  // V46: 如果 state.templates 为空，尝试从模板库取第一个可用模板
+  if (!currentTpl || !currentTpl.rawData) {
+    var lib2 = state.templateLibrary[platform] || [];
+    if (lib2.length > 0) {
+      console.log('  🔄 V46 回退: 使用模板库第一个模板:', lib2[0].name);
+      state.templates[platform] = lib2[0];
+      console.groupEnd();
+      return lib2[0];
+    }
+  }
+  
   console.groupEnd();
   return currentTpl || null;
 }
