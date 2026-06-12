@@ -628,7 +628,7 @@
       <!-- 操作提示 -->
       <div class="card" style="margin-bottom:16px;padding:10px 16px;background:linear-gradient(135deg,#eff6ff,#f0f9ff);border-left:4px solid #1677ff">
         <div style="font-size:.8rem;color:var(--muted);display:flex;gap:24px;flex-wrap:wrap">
-          <span>🖱 <b>鼠标拖拽</b>框选水印区域</span>
+          <span>🖱 <b>鼠标拖拽</b>框选水印区域（可超出图片边界）</span>
           <span>🎨 红色区域 = 要移除的水印</span>
           <span>🔗 启用同步后，框选一张即可同步全部</span>
           <span>↩ <b>右键点击</b>图片 = 撤销所有标记</span>
@@ -4397,81 +4397,94 @@ function setupWmDrawing(previewCanvas, item, idx) {
   var isDrawing = false;
   var startX, startY;
 
+  // V38: 使用 document 级监听，鼠标超出图片也不取消框选
+  function clampX(clientX) {
+    var rect = previewCanvas.getBoundingClientRect();
+    var scaleX = item.width / rect.width;
+    var raw = (clientX - rect.left) * scaleX;
+    return Math.max(0, Math.min(item.width, raw));
+  }
+  function clampY(clientY) {
+    var rect = previewCanvas.getBoundingClientRect();
+    var scaleY = item.height / rect.height;
+    var raw = (clientY - rect.top) * scaleY;
+    return Math.max(0, Math.min(item.height, raw));
+  }
+
+  var docMoveHandler = null;
+  var docUpHandler = null;
+
   previewCanvas.addEventListener('mousedown', function(e) {
     var rect = previewCanvas.getBoundingClientRect();
     var scaleX = item.width / rect.width;
     var scaleY = item.height / rect.height;
-    startX = (e.clientX - rect.left) * scaleX;
-    startY = (e.clientY - rect.top) * scaleY;
+    var rawX = (e.clientX - rect.left) * scaleX;
+    var rawY = (e.clientY - rect.top) * scaleY;
+    startX = Math.max(0, Math.min(item.width, rawX));
+    startY = Math.max(0, Math.min(item.height, rawY));
     isDrawing = true;
-    e.preventDefault();
-  });
 
-  previewCanvas.addEventListener('mousemove', function(e) {
-    if (!isDrawing) return;
-    var rect = previewCanvas.getBoundingClientRect();
-    var scaleX = item.width / rect.width;
-    var scaleY = item.height / rect.height;
-    var curX = (e.clientX - rect.left) * scaleX;
-    var curY = (e.clientY - rect.top) * scaleY;
-    var displayW = previewCanvas.width;
-    var displayH = previewCanvas.height;
-    drawWmPreview(previewCanvas, item, displayW, displayH);
-    var ctx = previewCanvas.getContext('2d');
-    var rx = Math.min(startX, curX) * displayW / item.width;
-    var ry = Math.min(startY, curY) * displayH / item.height;
-    var rw = Math.abs(curX - startX) * displayW / item.width;
-    var rh = Math.abs(curY - startY) * displayH / item.height;
-    ctx.strokeStyle = '#ff0000';
-    ctx.lineWidth = 2;
-    ctx.setLineDash([5, 3]);
-    ctx.strokeRect(rx, ry, rw, rh);
-    ctx.setLineDash([]);
-  });
+    // V38: document 级监听，鼠标超出 canvas 也能继续拖拽
+    docMoveHandler = function(ev) {
+      if (!isDrawing) return;
+      var curX = clampX(ev.clientX);
+      var curY = clampY(ev.clientY);
+      var displayW = previewCanvas.width;
+      var displayH = previewCanvas.height;
+      drawWmPreview(previewCanvas, item, displayW, displayH);
+      var ctx = previewCanvas.getContext('2d');
+      var rx = Math.min(startX, curX) * displayW / item.width;
+      var ry = Math.min(startY, curY) * displayH / item.height;
+      var rw = Math.abs(curX - startX) * displayW / item.width;
+      var rh = Math.abs(curY - startY) * displayH / item.height;
+      ctx.strokeStyle = '#ff0000';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([5, 3]);
+      ctx.strokeRect(rx, ry, rw, rh);
+      ctx.setLineDash([]);
+    };
 
-  previewCanvas.addEventListener('mouseup', function(e) {
-    if (!isDrawing) return;
-    isDrawing = false;
-    var rect = previewCanvas.getBoundingClientRect();
-    var scaleX = item.width / rect.width;
-    var scaleY = item.height / rect.height;
-    var endX = (e.clientX - rect.left) * scaleX;
-    var endY = (e.clientY - rect.top) * scaleY;
-    var x = Math.round(Math.min(startX, endX));
-    var y = Math.round(Math.min(startY, endY));
-    var w = Math.round(Math.abs(endX - startX));
-    var h = Math.round(Math.abs(endY - startY));
-    if (w < 5 || h < 5) {
-      drawWmPreview(previewCanvas, item, previewCanvas.width, previewCanvas.height);
-      return;
-    }
-    // 绘制到遮罩
-    var maskCtx = item.maskCanvas.getContext('2d');
-    maskCtx.fillStyle = '#ff0000';
-    maskCtx.fillRect(x, y, w, h);
-
-    // 同步：将当前mask区域复制到所有其他图片
-    if (wmState.syncEnabled && wmState.images.length > 1) {
-      wmState.images.forEach(function(dstItem, dstIdx) {
-        if (dstIdx === idx) return;
-        copyMaskRegion(item, dstItem);
-        dstItem.processed = false;
-        dstItem.processedUrl = null;
-      });
-    }
-
-    // 刷新预览
-    drawWmPreview(previewCanvas, item, previewCanvas.width, previewCanvas.height);
-    if (wmState.syncEnabled) {
-      showToast('水印位置已同步到全部 ' + wmState.images.length + ' 张图片', 'success');
-    }
-  });
-
-  previewCanvas.addEventListener('mouseleave', function() {
-    if (isDrawing) {
+    docUpHandler = function(ev) {
+      if (!isDrawing) return;
       isDrawing = false;
+      document.removeEventListener('mousemove', docMoveHandler);
+      document.removeEventListener('mouseup', docUpHandler);
+
+      var endX = clampX(ev.clientX);
+      var endY = clampY(ev.clientY);
+      var x = Math.round(Math.min(startX, endX));
+      var y = Math.round(Math.min(startY, endY));
+      var w = Math.round(Math.abs(endX - startX));
+      var h = Math.round(Math.abs(endY - startY));
+      if (w < 5 || h < 5) {
+        drawWmPreview(previewCanvas, item, previewCanvas.width, previewCanvas.height);
+        return;
+      }
+      // 绘制到遮罩
+      var maskCtx = item.maskCanvas.getContext('2d');
+      maskCtx.fillStyle = '#ff0000';
+      maskCtx.fillRect(x, y, w, h);
+
+      // 同步：将当前mask区域复制到所有其他图片
+      if (wmState.syncEnabled && wmState.images.length > 1) {
+        wmState.images.forEach(function(dstItem, dstIdx) {
+          if (dstIdx === idx) return;
+          copyMaskRegion(item, dstItem);
+          dstItem.processed = false;
+          dstItem.processedUrl = null;
+        });
+      }
+
+      // 刷新预览
       drawWmPreview(previewCanvas, item, previewCanvas.width, previewCanvas.height);
-    }
+      if (wmState.syncEnabled) {
+        showToast('水印位置已同步到全部 ' + wmState.images.length + ' 张图片', 'success');
+      }
+    };
+
+    document.addEventListener('mousemove', docMoveHandler);
+    document.addEventListener('mouseup', docUpHandler);
+    e.preventDefault();
   });
 
   // 右键清除遮罩
@@ -5185,11 +5198,21 @@ function beCrop(idx) {
       '<div style="display:flex;gap:20px;flex-wrap:wrap">' +
         // 预览区域
         '<div style="flex:1;min-width:280px;text-align:center">' +
-          '<div style="position:relative;display:inline-block;border:1px solid var(--border);border-radius:4px;overflow:hidden;background:#f0f0f0">' +
+          '<div style="position:relative;display:inline-block;border:1px solid var(--border);border-radius:4px;overflow:visible;background:#f0f0f0">' +
             '<canvas id="beCropPreview" width="' + pw + '" height="' + ph + '" style="display:block;max-width:100%"></canvas>' +
-            '<div id="beCropOverlay" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;background:rgba(0,0,0,0);border:2px dashed #1677ff;transform-origin:0 0"></div>' +
+            '<div id="beCropOverlay" style="position:absolute;top:0;left:0;width:100%;height:100%;background:transparent;border:2px dashed #1677ff;transform-origin:0 0;cursor:move;z-index:2">' +
+              // V38: 8个拖拽手柄
+              '<div class="crop-handle" data-handle="nw" style="position:absolute;top:-5px;left:-5px;width:10px;height:10px;background:#fff;border:2px solid #1677ff;border-radius:2px;cursor:nw-resize;z-index:3"></div>' +
+              '<div class="crop-handle" data-handle="ne" style="position:absolute;top:-5px;right:-5px;width:10px;height:10px;background:#fff;border:2px solid #1677ff;border-radius:2px;cursor:ne-resize;z-index:3"></div>' +
+              '<div class="crop-handle" data-handle="sw" style="position:absolute;bottom:-5px;left:-5px;width:10px;height:10px;background:#fff;border:2px solid #1677ff;border-radius:2px;cursor:sw-resize;z-index:3"></div>' +
+              '<div class="crop-handle" data-handle="se" style="position:absolute;bottom:-5px;right:-5px;width:10px;height:10px;background:#fff;border:2px solid #1677ff;border-radius:2px;cursor:se-resize;z-index:3"></div>' +
+              '<div class="crop-handle" data-handle="n" style="position:absolute;top:-5px;left:50%;transform:translateX(-50%);width:30px;height:10px;background:#fff;border:2px solid #1677ff;border-radius:2px;cursor:n-resize;z-index:3"></div>' +
+              '<div class="crop-handle" data-handle="s" style="position:absolute;bottom:-5px;left:50%;transform:translateX(-50%);width:30px;height:10px;background:#fff;border:2px solid #1677ff;border-radius:2px;cursor:s-resize;z-index:3"></div>' +
+              '<div class="crop-handle" data-handle="e" style="position:absolute;top:50%;right:-5px;transform:translateY(-50%);width:10px;height:30px;background:#fff;border:2px solid #1677ff;border-radius:2px;cursor:e-resize;z-index:3"></div>' +
+              '<div class="crop-handle" data-handle="w" style="position:absolute;top:50%;left:-5px;transform:translateY(-50%);width:10px;height:30px;background:#fff;border:2px solid #1677ff;border-radius:2px;cursor:w-resize;z-index:3"></div>' +
+            '</div>' +
           '</div>' +
-          '<div style="margin-top:6px;font-size:.72rem;color:var(--muted)">虚线区域 = 保留区域，外围 = 裁剪掉</div>' +
+          '<div style="margin-top:6px;font-size:.72rem;color:var(--muted)">虚线 = 保留区域 · 可拖动边框/角调整 · 外围裁剪掉</div>' +
         '</div>' +
         // 输入区域
         '<div style="width:200px">' +
@@ -5229,8 +5252,107 @@ function beCrop(idx) {
   overlay._cropScale = scale;
   overlay._cropIdx = idx;
   overlay._srcCanvas = srcCanvas;
+
+  // V38: 裁剪框拖动功能
+  setupCropDrag(overlay, w, h, scale);
 }
 
+
+// V38: 裁剪框拖动 → 实时更新输入框像素
+function setupCropDrag(overlay, origW, origH, scale) {
+  var cropOvl = overlay.querySelector('#beCropOverlay');
+  if (!cropOvl) return;
+
+  var dragMode = null; // 'move' | 'nw'|'n'|'ne'|'e'|'se'|'s'|'sw'|'w'
+  var dragStartX, dragStartY;
+  var initTop, initLeft, initRight, initBottom;
+
+  function readPixels() {
+    return {
+      top: parseInt(document.getElementById('beCropTop').value) || 0,
+      right: parseInt(document.getElementById('beCropRight').value) || 0,
+      bottom: parseInt(document.getElementById('beCropBottom').value) || 0,
+      left: parseInt(document.getElementById('beCropLeft').value) || 0
+    };
+  }
+
+  function setPixels(top, right, bottom, left) {
+    top = Math.max(0, Math.min(origH - 1, Math.round(top)));
+    right = Math.max(0, Math.min(origW - 1, Math.round(right)));
+    bottom = Math.max(0, Math.min(origH - 1, Math.round(bottom)));
+    left = Math.max(0, Math.min(origW - 1, Math.round(left)));
+    document.getElementById('beCropTop').value = top;
+    document.getElementById('beCropRight').value = right;
+    document.getElementById('beCropBottom').value = bottom;
+    document.getElementById('beCropLeft').value = left;
+    updateBeCropPreview(origW, origH, scale);
+  }
+
+  // 手柄拖拽
+  cropOvl.addEventListener('mousedown', function(e) {
+    var handle = e.target.closest('.crop-handle');
+    if (handle) {
+      dragMode = handle.dataset.handle;
+    } else if (e.target === cropOvl) {
+      dragMode = 'move';
+    } else {
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    dragStartX = e.clientX;
+    dragStartY = e.clientY;
+    var px = readPixels();
+    initTop = px.top; initRight = px.right; initBottom = px.bottom; initLeft = px.left;
+
+    function onMove(ev) {
+      var dx = (ev.clientX - dragStartX) / scale;
+      var dy = (ev.clientY - dragStartY) / scale;
+      var newTop = initTop, newRight = initRight, newBottom = initBottom, newLeft = initLeft;
+
+      switch (dragMode) {
+        case 'move':
+          newTop = initTop + dy;
+          newLeft = initLeft + dx;
+          // 保持结果尺寸不变 → 调整 right/bottom
+          newRight = origW - newLeft - (origW - initLeft - initRight);
+          newBottom = origH - newTop - (origH - initTop - initBottom);
+          break;
+        case 'nw': newTop = initTop + dy; newLeft = initLeft + dx; break;
+        case 'ne': newTop = initTop + dy; newRight = initRight - dx; break;
+        case 'sw': newBottom = initBottom - dy; newLeft = initLeft + dx; break;
+        case 'se': newBottom = initBottom - dy; newRight = initRight - dx; break;
+        case 'n':  newTop = initTop + dy; break;
+        case 's':  newBottom = initBottom - dy; break;
+        case 'e':  newRight = initRight - dx; break;
+        case 'w':  newLeft = initLeft + dx; break;
+      }
+
+      // 防止翻转（结果尺寸不能为负）
+      var rw = origW - newLeft - newRight;
+      var rh = origH - newTop - newBottom;
+      if (rw <= 0) {
+        if (dragMode === 'move' || dragMode === 'w' || dragMode === 'nw' || dragMode === 'sw') newLeft = origW - newRight - 1;
+        if (dragMode === 'move' || dragMode === 'e' || dragMode === 'ne' || dragMode === 'se') newRight = origW - newLeft - 1;
+      }
+      if (rh <= 0) {
+        if (dragMode === 'move' || dragMode === 'n' || dragMode === 'nw' || dragMode === 'ne') newTop = origH - newBottom - 1;
+        if (dragMode === 'move' || dragMode === 's' || dragMode === 'sw' || dragMode === 'se') newBottom = origH - newTop - 1;
+      }
+
+      setPixels(newTop, newRight, newBottom, newLeft);
+    }
+
+    function onUp() {
+      dragMode = null;
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    }
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+}
 function updateBeCropPreview(origW, origH, scale) {
   var top = parseInt(document.getElementById('beCropTop').value) || 0;
   var right = parseInt(document.getElementById('beCropRight').value) || 0;
