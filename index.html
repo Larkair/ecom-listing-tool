@@ -1936,12 +1936,17 @@ async function saveAsScheme() {
 
   if (!tpl) { showToast('请先导入模板', 'warn'); return; }
 
-  // 获取模板原始文件的 base64（优先 localStorage，其次从 state.rawData 编码）
+  // V41: 直接使用 state.templates[platform].rawData 编码，不依赖 localStorage
+  // 因为 localStorage 可能被其他模板加载操作覆盖
   var templateRawData = null;
   try {
-    templateRawData = localStorage.getItem('tpl_raw_' + platform);
-    if (!templateRawData && tpl.rawData) {
+    if (tpl.rawData && tpl.rawData.length > 0) {
       templateRawData = arrayBufferToBase64(tpl.rawData);
+      console.log('📋 saveAsScheme: 从 state.templates[' + platform + '].rawData 编码, 长度=' + templateRawData.length);
+    } else {
+      // 回退到 localStorage（兼容旧数据）
+      templateRawData = localStorage.getItem('tpl_raw_' + platform);
+      console.log('📋 saveAsScheme: state.templates[' + platform + '].rawData 为空，回退 localStorage, 长度=' + (templateRawData||'').length);
     }
   } catch(e) { console.warn('获取模板原始数据失败:', e.message); }
 
@@ -1979,6 +1984,8 @@ async function saveAsScheme() {
     updateCurrentSchemeBadge();
     renderSchemeList();
     document.getElementById('newSchemeName').value = '';
+    // V41: 成功保存后同时备份到 localStorage (双保险)
+    try { localStorage.setItem('ecom_schemes_fallback', JSON.stringify(state.configSchemes)); } catch(lsErr) {}
     showToast('方案「' + name + '」已保存（含模板文件）', 'success');
   } catch(e) {
     console.error('Save scheme error:', e);
@@ -3922,30 +3929,49 @@ function updateExportRecordBadge() {
   }
 }
 
-// V39: 根据产品关联的方案解析导出模板（而非直接使用当前模板）
+// V41: 根据产品关联的方案解析导出模板（而非直接使用当前模板）
 function resolveExportTemplate(platform) {
   var products = state.products[platform] || [];
+  var schemes = state.configSchemes[platform] || [];
+  var currentTpl = state.templates[platform];
+
+  console.group('🔍 resolveExportTemplate(' + platform + ')');
+  console.log('  产品数:', products.length);
+  console.log('  方案数:', schemes.length);
+  console.log('  当前 state.templates[' + platform + ']:', currentTpl ? (currentTpl.filename || '(无文件名)') : 'null');
+  
   // 收集所有产品关联的方案ID
   var schemeIds = new Set();
   products.forEach(function(p) {
     if (p.configSchemeId) schemeIds.add(p.configSchemeId);
+    console.log('  产品:', p.name, '| configSchemeId:', p.configSchemeId, '| configSchemeName:', p.configSchemeName);
   });
+
+  console.log('  收集到的 schemeIds:', Array.from(schemeIds));
 
   // 如果产品有明确关联的方案，优先使用方案的模板
   if (schemeIds.size > 0) {
-    var schemes = state.configSchemes[platform] || [];
-    // 优先使用第一个产品的方案（如果所有产品方案一致，就用那个）
+    // 优先使用第一个产品的方案
     var targetSchemeId = products[0]?.configSchemeId;
-    var scheme = schemes.find(function(s) { return s.id === targetSchemeId; });
+    console.log('  目标方案 ID:', targetSchemeId, '(来源: products[0])');
+    
+    // V41: 使用 == 避免类型不匹配 (Supabase id 可能是 bigint/string)
+    var scheme = schemes.find(function(s) { return s.id == targetSchemeId; });
+    console.log('  匹配方案:', scheme ? (scheme.scheme_name + ' (id=' + scheme.id + ', type=' + typeof scheme.id + ')') : '未找到');
 
     if (!scheme && schemeIds.size === 1) {
-      // 第一个产品可能没 schemeId but 其他产品有
       targetSchemeId = Array.from(schemeIds)[0];
-      scheme = schemes.find(function(s) { return s.id === targetSchemeId; });
+      scheme = schemes.find(function(s) { return s.id == targetSchemeId; });
+      console.log('  回退匹配 (schemeIds.size===1):', scheme ? scheme.scheme_name : '仍未找到');
     }
 
+    // 打印所有可用方案以供对比
+    schemes.forEach(function(s) {
+      console.log('    可用方案: id=' + s.id + ' (type=' + typeof s.id + '), name=' + s.scheme_name + ', rawData=' + ((s.template_rawdata||'').length) + 'bytes');
+    });
+
     if (scheme && scheme.template_rawdata) {
-      console.log('📤 从方案「' + scheme.scheme_name + '」获取模板 rawData, 长度=' + (scheme.template_rawdata||'').length);
+      console.log('  ✅ 方案有 template_rawdata, 长度=' + scheme.template_rawdata.length);
       // 解析 template_meta
       var meta = {};
       try {
@@ -3963,14 +3989,15 @@ function resolveExportTemplate(platform) {
         config: meta.config || { sheetName: 'Sheet1', dataStartRow: 6 },
         extractSheet: meta.extractSheet || '',
         extractRow: meta.extractRow || 1,
-        rawData: null // 下面填充
+        rawData: null
       };
 
-      // 将 base64 rawData 转为 Array 格式（与 state.templates[].rawData 一致）
+      // 将 base64 rawData 转为 Array 格式
       try {
         var rawBuf = base64ToArrayBuffer(scheme.template_rawdata);
         resolvedTpl.rawData = Array.from(new Uint8Array(rawBuf));
-        // 同时写入 localStorage 以确保 getTemplateRawData 能找到
+        console.log('  ✅ rawData 解析成功, 长度=' + resolvedTpl.rawData.length);
+        // 同时写入 localStorage
         localStorage.setItem('tpl_raw_' + platform, scheme.template_rawdata);
         localStorage.setItem('tpl_sheets_' + platform, JSON.stringify(resolvedTpl.sheetNames));
         localStorage.setItem('tpl_config_' + platform, JSON.stringify(resolvedTpl.config));
@@ -3978,16 +4005,26 @@ function resolveExportTemplate(platform) {
           localStorage.setItem('tpl_extract_' + platform, JSON.stringify({ sheet: resolvedTpl.extractSheet, row: resolvedTpl.extractRow }));
         }
       } catch(e) {
-        console.warn('解析方案 template_rawdata 失败:', e.message);
+        console.warn('  ❌ 解析方案 template_rawdata 失败:', e.message);
+        console.groupEnd();
         return null;
       }
 
+      console.log('  📄 返回方案模板:', resolvedTpl.filename);
+      console.groupEnd();
       return resolvedTpl;
+    }
+    
+    if (scheme) {
+      console.warn('  ⚠️ 方案存在但 template_rawdata 为空/null!');
     }
   }
 
   // 回退：使用当前平台模板
-  return state.templates[platform] || null;
+  console.log('  🔄 回退: 使用 state.templates[' + platform + ']');
+  console.log('  当前模板:', currentTpl ? (currentTpl.filename || '(无文件名)') : 'null');
+  console.groupEnd();
+  return currentTpl || null;
 }
 
 async function exportExcel() {
@@ -4129,17 +4166,34 @@ async function loadDraft() {
         if (data.settings) state.settings = data.settings;
         showToast('已从本地缓存恢复（云端暂不可用）', 'warn');
       }
-      const schSaved = localStorage.getItem('ecom_schemes_fallback');
-      if (schSaved) {
-        state.configSchemes = JSON.parse(schSaved);
-      }
-      // 标题方案本地恢复
-      var tSchSaved = localStorage.getItem('ecom_title_schemes_fallback');
-      if (tSchSaved) {
-        try { state.titleSchemes = JSON.parse(tSchSaved); } catch(e) {}
-      }
     } catch(_) {}
   }
+  // V41: 始终合并 ecom_schemes_fallback（即使 Supabase 加载成功）
+  // 因为方案可能因模板文件过大导致 Supabase 插入失败，降级到 localStorage
+  try {
+    var schSaved = localStorage.getItem('ecom_schemes_fallback');
+    if (schSaved) {
+      var localSchemes = JSON.parse(schSaved);
+      // 合并：用 localSchemes 补充 state.configSchemes 中缺失的
+      Object.keys(localSchemes).forEach(function(plat) {
+        if (!state.configSchemes[plat]) state.configSchemes[plat] = [];
+        var supabaseIds = new Set(state.configSchemes[plat].map(function(s) { return s.id; }));
+        (localSchemes[plat] || []).forEach(function(ls) {
+          if (!supabaseIds.has(ls.id)) {
+            state.configSchemes[plat].push(ls);
+            console.log('📋 从 localStorage 补充方案:', ls.scheme_name, '| id:', ls.id, '| rawData:', (ls.template_rawdata||'').length, 'bytes');
+          }
+        });
+      });
+    }
+  } catch(e) { console.warn('恢复方案备份失败:', e.message); }
+  // 标题方案本地恢复
+  try {
+    var tSchSaved = localStorage.getItem('ecom_title_schemes_fallback');
+    if (tSchSaved) {
+      try { state.titleSchemes = JSON.parse(tSchSaved); } catch(e) {}
+    }
+  } catch(_) {}
   // 恢复当前平台 UI
   if (state.fieldConfigs[state.platform]?.length > 0) {
     document.getElementById('fieldConfigCard').style.display = 'block';
@@ -5996,6 +6050,33 @@ function updateBeButtons() {
   document.getElementById('beExportBtn').disabled = !hasEdited;
   document.getElementById('beClearBtn').disabled = !hasImages;
 }
+
+// =============================================
+// V41: 全局诊断函数 — 在浏览器控制台输入 __diagExport() 查看导出模板链路
+// =============================================
+window.__diagExport = function() {
+  console.group('🔍 导出模板诊断');
+  ['shopee','lazada','tiktok'].forEach(function(platform) {
+    console.group('平台: ' + platform);
+    var products = state.products[platform] || [];
+    console.log('产品数:', products.length);
+    products.forEach(function(p, i) {
+      console.log('  [' + i + ']', p.name, '| configSchemeId:', p.configSchemeId, '| configSchemeName:', p.configSchemeName);
+    });
+    var schemes = state.configSchemes[platform] || [];
+    console.log('方案数:', schemes.length);
+    schemes.forEach(function(s) {
+      console.log('  [id=' + s.id + ' type=' + typeof s.id + ']', s.scheme_name, '| rawData:', (s.template_rawdata||'').length, 'bytes', '| filename:', s.template_filename);
+    });
+    var tpl = state.templates[platform];
+    console.log('state.templates[' + platform + ']:', tpl ? (tpl.filename || '(无文件名)') : 'null', '| rawData:', (tpl && tpl.rawData ? tpl.rawData.length : 0));
+    var resolved = resolveExportTemplate(platform);
+    console.log('resolveExportTemplate 返回:', resolved ? (resolved.filename || '(无文件名)') : 'null', '| rawData:', (resolved && resolved.rawData ? resolved.rawData.length : 0));
+    console.groupEnd();
+  });
+  console.groupEnd();
+  return '诊断完成，请查看上方控制台输出';
+};
 
 document.addEventListener('DOMContentLoaded', async () => {
   // 检查 ExcelJS 是否加载成功
