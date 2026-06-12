@@ -1161,7 +1161,7 @@ const MAX_IMG_PER_GROUP = 9;
 // =============================================
 // Supabase 初始化（容错：CDN 加载失败不影响核心功能）
 // =============================================
-console.log('🛠 批量上架工具 V46 | 2026-06-12 | 方案管理+新方案选项 | 导出元数据持久化 | Telea FMM | JSZip');
+console.log('🛠 批量上架工具 V46 | 2026-06-12 | 预览空状态 + 清空/切换刷新 | Telea FMM | JSZip');
 // =============================================
 const SUPABASE_URL = 'https://khrppyhcjzkkokyhnhhd.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtocnBweWhjanpra29reWhuaGhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwNzY1NDEsImV4cCI6MjA5NjY1MjU0MX0.uS9YablBNwjUmQlwRbLRw3SEPNgEnO1Uc6Poe1SeB88';
@@ -1570,6 +1570,9 @@ function switchPlatform(platform, btn) {
   renderFieldList();
   renderProductList();
   updateCurrentSchemeBadge();
+  // V46: 如果当前在导出预览页面，同步刷新预览
+  var epPage = document.getElementById('page-export-preview');
+  if (epPage && epPage.classList.contains('active')) refreshPreview();
   showToast(`已切换到 ${names[platform]} 平台`, 'success');
 }
 
@@ -4275,6 +4278,13 @@ async function refreshPreview() {
   var products = state.products[state.platform];
   var container = document.getElementById('exportPreviewTable');
   
+  // V46: 防御 — 容器不存在时直接返回（页面未加载到预览tab时跳过，避免 TypeError）
+  if (!container) return;
+  
+  // V46: 立即清除预览表格，防止竞态条件下残留旧数据
+  container.innerHTML = '<div class="empty-state" style="padding:20px"><p>⏳ 加载中…</p></div>';
+  document.getElementById('previewInfo').textContent = '—';
+  
   // V43: 渲染产品选择面板
   renderPreviewProductCheckboxes();
   
@@ -5301,6 +5311,7 @@ async function clearAllData() {
   updateTemplateSelector();
   document.getElementById('importedFileName').textContent = '';
   document.getElementById('productFormWrap').innerHTML = '<div class="empty-state"><p>请新增产品</p></div>';
+  refreshPreview(); // V46: 同步清空导出预览
   showToast('所有数据已从云端清空', 'success');
 }
 
