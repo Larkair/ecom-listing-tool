@@ -922,6 +922,8 @@ async function loadFromSupabase() {
         product.selectedTitle = product.selectedTitle || '';
         product.startCode = product.startCode || '';
         product.sizeChart = product.sizeChart || null;
+        product.configSchemeId = product.configSchemeId || null;
+        product.configSchemeName = product.configSchemeName || '';
         state.products[p.platform].push(product);
       });
     }
@@ -1009,7 +1011,8 @@ async function syncToSupabase() {
           product_data: { images, fixedDetailImages: fdi, sizeChart: sc,
             startCode: p.startCode || '', fieldValues: p.fieldValues || {},
             aiTitleParts: p.aiTitleParts || ['','','','','','','','','',''],
-            generatedTitles: p.generatedTitles || [], selectedTitle: p.selectedTitle || '' },
+            generatedTitles: p.generatedTitles || [], selectedTitle: p.selectedTitle || '',
+            configSchemeId: p.configSchemeId || null, configSchemeName: p.configSchemeName || '' },
           sort_order: i, updated_at: new Date().toISOString()
         };
       }));
