@@ -3074,10 +3074,11 @@ function styleLabel(i) {
 
 const FIXED_FIELDS = new Set(['类目','品牌','描述','重量','长度','宽度','高度','价格','库存','尺码表图片','面料','风格','领型','版型','机洗']);
 
-function buildExportData(includeTemplate) {
+// V40: 支持传入 fields 参数，导出时使用方案关联的字段配置而非当前模板的
+function buildExportData(includeTemplate, optFields) {
   // includeTemplate: true = 包含模板行（用于预览），false = 仅数据行（用于导出写入模板）
   if (typeof includeTemplate === 'undefined') includeTemplate = false;
-  const fields = state.fieldConfigs[state.platform];
+  const fields = optFields || state.fieldConfigs[state.platform];
   const products = state.products[state.platform];
   const headers = fields.map(f => f.name);
   var colCount = fields.length;
@@ -3462,7 +3463,18 @@ async function exportExcelWithTemplate() {
   }
   
   // 1. 获取模板原始 ArrayBuffer
-  const rawData = await getTemplateRawData(platform);
+  // V40: 直接使用 resolveExportTemplate 返回的 rawData，而非通过 localStorage 间接获取
+  // 因为 localStorage 可能被其他模板加载操作覆盖，导致"用了错误模板"的 Bug
+  var rawData = null;
+  if (tpl && tpl.rawData) {
+    rawData = new Uint8Array(tpl.rawData).buffer;
+    console.log('📤 直接从 resolveExportTemplate 的 rawData 构建 ArrayBuffer, 长度:', rawData.byteLength);
+  } else {
+    rawData = await getTemplateRawData(platform);
+    if (rawData) {
+      console.log('📤 从 getTemplateRawData(localStorage) 获取 ArrayBuffer, 长度:', rawData.byteLength);
+    }
+  }
   if (!rawData) {
     showToast('模板文件已丢失，请重新导入模板文件！', 'error');
     // 弹出提示：是否只用数据导出（不含模板格式）
@@ -3506,8 +3518,11 @@ async function exportExcelWithTemplate() {
   if (!worksheet) { showToast('工作簿中无可用 Sheet', 'error'); return false; }
   
   // 5. 构建纯数据行（不含模板行）
+  // V40: 使用方案关联的字段配置，而非当前模板的字段配置
   showToast('正在生成导出数据…', 'info');
-  const result = buildExportData(false);
+  const exportFields = (tpl && tpl.fields && tpl.fields.length > 0) ? tpl.fields : null;
+  console.log('📤 导出使用字段来源:', exportFields ? '来自方案(' + exportFields.length + '个)' : '来自当前模板(' + (state.fieldConfigs[platform]||[]).length + '个)');
+  const result = buildExportData(false, exportFields);
   const dataRows = result.rows;
   console.log('📤 buildExportData(false):', dataRows.length, '行, 首行:',
     dataRows.length > 0 ? JSON.stringify(dataRows[0].slice(0, 3)) : '无数据');
@@ -3639,7 +3654,13 @@ async function exportExcelWithTemplateFallback() {
   var tpl = resolveExportTemplate(platform);
   var config = tpl?.config;
   if (!config) { showToast('无法获取模板配置', 'error'); return false; }
-  const rawData = await getTemplateRawData(platform);
+  // V40: 直接使用 resolveExportTemplate 返回的 rawData
+  var rawData = null;
+  if (tpl && tpl.rawData) {
+    rawData = new Uint8Array(tpl.rawData).buffer;
+  } else {
+    rawData = await getTemplateRawData(platform);
+  }
   if (!rawData) { showToast('模板文件已丢失', 'error'); return false; }
   
   let wb;
@@ -3654,8 +3675,9 @@ async function exportExcelWithTemplateFallback() {
     targetSheet = wb.Sheets[wb.SheetNames[0]];
   }
   
-  const result = buildExportData(false);
-  const dataRows = result.rows;
+  var expFields = (tpl && tpl.fields && tpl.fields.length > 0) ? tpl.fields : null;
+  var result = buildExportData(false, expFields);
+  var dataRows = result.rows;
   
   // 图片处理（简化版）
   if (sb) {
@@ -3992,7 +4014,9 @@ async function exportExcel() {
     if (typeof XLSX === 'undefined') { showToast('Excel 组件加载失败，请刷新页面', 'error'); return; }
 
     showToast('正在生成导出数据…', 'info');
-    var result = buildExportData(false); // 导出不需要模板行
+    // V40: 优先使用方案关联的字段配置
+    var expFields = (tpl && tpl.fields && tpl.fields.length > 0) ? tpl.fields : null;
+    var result = buildExportData(false, expFields); // 导出不需要模板行
     var rows = result.rows;
 
     // 收集图片单元格（跳过模板行）
