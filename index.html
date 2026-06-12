@@ -7205,9 +7205,11 @@ function initLogoPosition(bgItem, cardW, cardH) {
     logoH = targetW;
     logoW = targetW * ratio;
   }
-  // 居中
-  bgItem.logoX = (renderW - logoW) / 2;
-  bgItem.logoY = (renderH - logoH) / 2;
+  // 居中 — 注意：底图在卡片中居中显示，logo 坐标需加上底图的偏移量
+  var imgOffsetX = (cardW - renderW) / 2;
+  var imgOffsetY = (cardH - renderH) / 2;
+  bgItem.logoX = imgOffsetX + (renderW - logoW) / 2;
+  bgItem.logoY = imgOffsetY + (renderH - logoH) / 2;
   bgItem.logoW = logoW;
   bgItem.logoH = logoH;
   bgItem.logoR = 0;
@@ -7473,18 +7475,23 @@ function renderLoResult(idx) {
     var card = document.getElementById('loCard_' + idx);
     var imgEl = card ? card.querySelector('img.bg-img') : null;
     var renderW = canvas.width, renderH = canvas.height;
+    var imgOffsetX = 0, imgOffsetY = 0;
     if (imgEl) {
       var ir = imgEl.getBoundingClientRect();
+      var cr = card.getBoundingClientRect();
       if (ir.width > 0) {
         renderW = ir.width;
         renderH = ir.height;
+        imgOffsetX = ir.left - cr.left;
+        imgOffsetY = ir.top - cr.top;
       }
     }
     var scaleX = canvas.width / renderW;
     var scaleY = canvas.height / renderH;
 
-    var lx = bgItem.logoX * scaleX;
-    var ly = bgItem.logoY * scaleY;
+    // V45 hotfix: logoX/logoY 是相对于卡片左上角的，需扣除底图在卡片内的偏移
+    var lx = (bgItem.logoX - imgOffsetX) * scaleX;
+    var ly = (bgItem.logoY - imgOffsetY) * scaleY;
     var lw = bgItem.logoW * scaleX;
     var lh = bgItem.logoH * scaleY;
 
