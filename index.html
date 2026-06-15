@@ -1380,7 +1380,29 @@ async function compressImageList(list, maxW, maxH, quality) {
 
 // =============================================
 // 图床上传：将 dataUrl 上传到 Supabase Storage，返回公开访问 URL
+// V49: 改用内容 hash 去重 + upsert，相同图片不会重复存储
 // =============================================
+
+// 计算字符串的简单 hash（用于图片去重，非加密安全）
+async function contentHash(dataUrl) {
+  // 取 dataUrl 的 base64 部分做简单 hash
+  var b64 = dataUrl.split(',')[1] || dataUrl;
+  // 使用 SubtleCrypto 计算 SHA-256
+  if (crypto && crypto.subtle) {
+    var buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(b64));
+    var arr = new Uint8Array(buf);
+    var hex = '';
+    for (var i = 0; i < 8; i++) { hex += arr[i].toString(16).padStart(2, '0'); }
+    return hex;
+  }
+  // 回退：简单 djb2 hash
+  var hash = 5381;
+  for (var i = 0; i < b64.length; i++) {
+    hash = ((hash << 5) + hash + b64.charCodeAt(i)) & 0xFFFFFFFF;
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
 async function uploadImageToStorage(dataUrl, filename) {
   if (!sb) return null;
   try {
@@ -1388,13 +1410,14 @@ async function uploadImageToStorage(dataUrl, filename) {
     const blob = await res.blob();
     const ext = (filename || 'image.jpg').split('.').pop() || 'jpg';
     const mime = blob.type || 'image/jpeg';
-    const filePath = 'products/' + Date.now() + '_' + Math.random().toString(36).substring(2, 10) + '.' + ext;
+    // V49: 使用内容 hash 替代随机数，实现去重
+    const hash = await contentHash(dataUrl);
+    const filePath = 'products/' + hash + '.' + ext;
     const { data, error } = await sb.storage
       .from('product-images')
-      .upload(filePath, blob, { contentType: mime, upsert: false });
+      .upload(filePath, blob, { contentType: mime, upsert: true });
     if (error) {
       console.warn('图床上传失败:', error.message || error);
-      // 如果是 bucket 不存在的错误，给出明确提示
       if (error.message && error.message.includes('Bucket not found')) {
         console.warn('Supabase Storage 中未找到 "product-images" Bucket，请在 Dashboard 中创建，并设置为 Public，同时添加 anon 的 INSERT 和 SELECT 策略。');
       }
