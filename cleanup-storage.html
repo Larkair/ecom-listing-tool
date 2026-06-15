@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>清理 product-images 存储空间</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f5f5f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+.card { background: #fff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); padding: 32px; max-width: 520px; width: 100%; margin: 20px; }
+h1 { font-size: 20px; margin-bottom: 8px; }
+.desc { color: #666; font-size: 14px; margin-bottom: 24px; line-height: 1.6; }
+.status { padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; font-size: 14px; line-height: 1.6; }
+.status.info { background: #f0f7ff; color: #0369a1; }
+.status.success { background: #f0fdf4; color: #15803d; }
+.status.error { background: #fef2f2; color: #dc2626; }
+.status.warn { background: #fefce8; color: #a16207; }
+.status.working { background: #f8fafc; color: #475569; }
+button { width: 100%; padding: 12px; border-radius: 8px; font-size: 15px; font-weight: 500; cursor: pointer; border: none; transition: opacity 0.2s; }
+button:hover { opacity: 0.85; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-scan { background: #2563eb; color: #fff; margin-bottom: 12px; }
+.btn-clean { background: #dc2626; color: #fff; }
+.log { margin-top: 16px; max-height: 200px; overflow-y: auto; font-family: monospace; font-size: 12px; background: #1e293b; color: #e2e8f0; padding: 12px; border-radius: 8px; line-height: 1.8; }
+.log .ok { color: #4ade80; }
+.log .err { color: #f87171; }
+.log .info { color: #93c5fd; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>清理 product-images 存储</h1>
+  <p class="desc">此工具通过 Supabase Storage API 彻底删除 product-images bucket 中的所有文件。Dashboard 手动删除只删元数据，底层 S3 文件不会真正释放。</p>
+  <div id="status" class="status info">点击「扫描文件」开始</div>
+  <button id="btnScan" class="btn-scan" onclick="scanFiles()">扫描文件</button>
+  <button id="btnClean" class="btn-clean" onclick="cleanAll()" disabled>清空所有文件</button>
+  <div id="log" class="log" style="display:none"></div>
+</div>
+<script>
+const SUPABASE_URL = 'https://khrppyhcjzkkokyhnhhd.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtocnBweWhjanpra29reWhuaGhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwNzY1NDEsImV4cCI6MjA5NjY1MjU0MX0.uS9YablBNwjUmQlwRbLRw3SEPNgEnO1Uc6Poe1SeB88';
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const bucket = 'product-images';
+let allFiles = [];
+let cleaning = false;
+
+function setStatus(msg, cls) {
+  const el = document.getElementById('status');
+  el.className = 'status ' + cls;
+  el.textContent = msg;
+}
+
+function addLog(msg, cls) {
+  const el = document.getElementById('log');
+  el.style.display = 'block';
+  el.innerHTML += '<div class="' + cls + '">' + msg + '</div>';
+  el.scrollTop = el.scrollHeight;
+}
+
+async function listAll(prefix) {
+  const files = [];
+  let cursor = null;
+  do {
+    const opts = { limit: 100 };
+    if (cursor) opts.offset = cursor;
+    const { data, error } = await sb.storage.from(bucket).list(prefix || 'products', opts);
+    if (error) { addLog('列出失败: ' + error.message, 'err'); break; }
+    if (!data || data.length === 0) break;
+    for (const f of data) {
+      if (f.id) files.push((prefix ? prefix + '/' : '') + f.name);
+    }
+    if (data.length < 100) break;
+    // 简单分页：用最后一个文件的 created_at 排序
+    cursor = files.length;
+  } while (true);
+  return files;
+}
+
+async function scanFiles() {
+  document.getElementById('btnScan').disabled = true;
+  setStatus('正在扫描…', 'working');
+  allFiles = [];
+
+  // 列出 products/ 下所有文件
+  const files = await listAll('products');
+  allFiles = files;
+
+  if (allFiles.length === 0) {
+    setStatus('没有发现任何文件', 'success');
+  } else {
+    setStatus('发现 ' + allFiles.length + ' 个文件，可以点击「清空所有文件」', 'warn');
+    addLog('扫描完成，共 ' + allFiles.length + ' 个文件', 'info');
+    for (const f of allFiles.slice(0, 20)) addLog('  - ' + f, '');
+    if (allFiles.length > 20) addLog('  ... 还有 ' + (allFiles.length - 20) + ' 个', '');
+  }
+  document.getElementById('btnClean').disabled = allFiles.length === 0;
+  document.getElementById('btnScan').disabled = false;
+}
+
+async function cleanAll() {
+  if (cleaning) return;
+  if (!confirm('确定要删除全部 ' + allFiles.length + ' 个文件吗？此操作不可恢复。')) return;
+  cleaning = true;
+  document.getElementById('btnClean').disabled = true;
+  document.getElementById('btnScan').disabled = true;
+  setStatus('正在删除…', 'working');
+  addLog('开始清空 ' + allFiles.length + ' 个文件…', 'info');
+
+  let deleted = 0;
+  let failed = 0;
+  const batchSize = 100;
+
+  for (let i = 0; i < allFiles.length; i += batchSize) {
+    const batch = allFiles.slice(i, i + batchSize);
+    addLog('删除第 ' + (i + 1) + '-' + (i + batch.length) + ' 个…', '');
+    const { error } = await sb.storage.from(bucket).remove(batch);
+    if (error) {
+      addLog('批量删除失败，尝试逐个删除: ' + error.message, 'err');
+      for (const f of batch) {
+        const { error: e2 } = await sb.storage.from(bucket).remove([f]);
+        if (e2) { failed++; addLog('失败: ' + f + ' (' + e2.message + ')', 'err'); }
+        else { deleted++; }
+      }
+    } else {
+      deleted += batch.length;
+    }
+  }
+
+  if (failed === 0) {
+    setStatus('清空完成！共删除 ' + deleted + ' 个文件', 'success');
+    addLog('全部删除成功', 'ok');
+  } else {
+    setStatus('部分完成：删除 ' + deleted + ' 个，失败 ' + failed + ' 个', 'warn');
+    addLog('部分失败，建议重新扫描再清理一次', 'err');
+  }
+
+  allFiles = [];
+  cleaning = false;
+  document.getElementById('btnScan').disabled = false;
+  // 重新扫描确认
+  addLog('重新扫描确认…', 'info');
+  const remaining = await listAll('products');
+  if (remaining.length === 0) {
+    addLog('确认：bucket 已完全清空', 'ok');
+    setStatus('清空完成！存储空间已释放', 'success');
+  } else {
+    addLog('仍有 ' + remaining.length + ' 个残留文件', 'err');
+    setStatus('还有 ' + remaining.length + ' 个残留，请再次点击「扫描」和「清空」', 'warn');
+    allFiles = remaining;
+    document.getElementById('btnClean').disabled = false;
+  }
+}
+</script>
+</body>
+</html>
