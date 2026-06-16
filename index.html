@@ -3942,7 +3942,24 @@ function generateTitles(idx) {
     var validPicked = picked.filter(Boolean);
     if (validPicked.length === 0) continue;
     let title = validPicked.join(sep);
-    if (title.length > maxLen) title = title.substring(0, maxLen);
+    // V50-fix: ① 去除尾部空格 ② 超长时移除最后一个完整词组，不截断单词
+    title = title.trimEnd();
+    if (title.length > maxLen) {
+      // 从末尾逐个去掉词组（以 sep 分隔），直到长度不超过 maxLen
+      while (validPicked.length > 1 && validPicked.join(sep).trimEnd().length > maxLen) {
+        validPicked.pop();
+      }
+      title = validPicked.join(sep).trimEnd();
+      // 如果单个词组就超长，按 sep 在 maxLen 内最后一次出现的位置截断
+      if (title.length > maxLen) {
+        var lastSep = title.lastIndexOf(sep.trim());
+        if (lastSep > maxLen * 0.5) {
+          title = title.substring(0, lastSep).trimEnd();
+        } else {
+          title = title.substring(0, maxLen).trimEnd();
+        }
+      }
+    }
     titles.add(title);
   }
   product.generatedTitles = [...titles];
