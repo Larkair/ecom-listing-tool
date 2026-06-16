@@ -5471,46 +5471,9 @@ function resolveExportTemplate(platform) {
     }
 
     // V50-fix: 如果 template_rawdata 为空但有 template_storage_path，从 Storage 下载
+    // 注意：此函数非 async，不能用 await；Storage 下载已移到 loadDraft() 中异步处理
     if (scheme && !scheme.template_rawdata && scheme.template_storage_path && sb) {
-      console.log('  📦 从 Storage 下载方案模板:', scheme.template_storage_path);
-      try {
-        var { data: dlData, error: dlErr } = await sb.storage.from('ecom-assets').download(scheme.template_storage_path);
-        if (!dlErr && dlData) {
-          var dlBuf = await dlData.arrayBuffer();
-          var dlArr = Array.from(new Uint8Array(dlBuf));
-          var dlB64 = arrayBufferToBase64(dlBuf);
-          var meta2 = {};
-          try {
-            meta2 = (scheme.template_meta && typeof scheme.template_meta === 'string')
-              ? JSON.parse(scheme.template_meta)
-              : (scheme.template_meta || {});
-          } catch(e) { meta2 = {}; }
-          var storageTpl = {
-            filename: scheme.template_filename || '',
-            data: scheme.template_data || [],
-            fields: scheme.field_configs || [],
-            sheetNames: meta2.sheetNames || [],
-            config: meta2.config || { sheetName: 'Sheet1', dataStartRow: 6 },
-            extractSheet: meta2.extractSheet || '',
-            extractRow: meta2.extractRow || 1,
-            rawData: dlArr
-          };
-          // 缓存到内存和 localStorage
-          scheme.template_rawdata = dlB64;
-          state.templates[platform] = storageTpl;
-          try {
-            localStorage.setItem('tpl_raw_' + platform, dlB64);
-            localStorage.setItem('tpl_sheets_' + platform, JSON.stringify(storageTpl.sheetNames));
-            localStorage.setItem('tpl_config_' + platform, JSON.stringify(storageTpl.config));
-            if (storageTpl.filename) localStorage.setItem('tpl_filename_' + platform, storageTpl.filename);
-          } catch(e) {}
-          console.log('  ✅ Storage 模板下载成功, 大小=' + dlArr.length);
-          console.groupEnd();
-          return storageTpl;
-        }
-      } catch(dlCatchErr) {
-        console.warn('  ❌ Storage 模板下载失败:', dlCatchErr.message);
-      }
+      console.log('  📦 方案模板需从 Storage 下载:', scheme.template_storage_path, '（将在 loadDraft 中异步恢复）');
     }
 
     if (scheme) {
@@ -8291,6 +8254,7 @@ window.__diagExport = function() {
 };
 
 document.addEventListener('DOMContentLoaded', async () => {
+  try {
   // 检查 ExcelJS 是否加载成功
   console.log('🔍 ExcelJS 加载状态:', typeof ExcelJS !== 'undefined' ? '✅ 已加载 (v' + (ExcelJS.Workbook ? 'OK' : 'partial') + ')' : '❌ 未加载');
   if (typeof ExcelJS === 'undefined') {
@@ -8334,6 +8298,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (sb) {
     ensureBucketExists('ecom-assets');
     ensureBucketExists('product-images');
+  }
+  } catch(initErr) {
+    console.error('❌ 初始化异常:', initErr);
+    showToast('页面初始化异常，部分功能可能不可用', 'error');
   }
 });
 </script>
