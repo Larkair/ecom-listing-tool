@@ -1164,7 +1164,7 @@ const MAX_IMG_PER_GROUP = 9;
 // =============================================
 // Supabase 初始化（容错：CDN 加载失败不影响核心功能）
 // =============================================
-console.log('🛠 批量上架工具 V50-fix2 | 2026-06-16 | 方案Storage分离存储 | DB添加template_storage_path列 | 加载端Storage下载');
+console.log('🛠 批量上架工具 V51 | 2026-06-16 | 分步初始化容错 | 模板持久化增强 | 损坏数据自动修复');
 // =============================================
 const SUPABASE_URL = 'https://khrppyhcjzkkokyhnhhd.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtocnBweWhjanpra29reWhuaGhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwNzY1NDEsImV4cCI6MjA5NjY1MjU0MX0.uS9YablBNwjUmQlwRbLRw3SEPNgEnO1Uc6Poe1SeB88';
@@ -1743,20 +1743,20 @@ function onTplSaveSheetChange() {
 async function saveTemplateToLibrary() {
   var pending = window.__pendingTemplate;
   if (!pending) return;
-  
+
   var platform = state.platform;
   var name = document.getElementById('tplSaveName').value.trim();
   if (!name) { showToast('请输入模板名称', 'warn'); return; }
-  
+
   var extSheet = document.getElementById('tplSaveExtSheet').value;
   var extRow = parseInt(document.getElementById('tplSaveExtRow').value) || 1;
   var writeSheet = document.getElementById('tplSaveWriteSheet').value;
   var writeRow = parseInt(document.getElementById('tplSaveWriteRow').value) || 6;
-  
+
   // 从选中 Sheet 提取数据
   var sheetData = pending.allSheetData[extSheet] || [];
   var extractedData = sheetData.slice(extRow - 1);
-  
+
   // 生成字段
   var headerRow = sheetData[extRow - 1] || [];
   var fields = headerRow.map(function(h, i) {
@@ -1770,7 +1770,7 @@ async function saveTemplateToLibrary() {
       assoc: ''
     };
   }).filter(function(f) { return f.name; });
-  
+
   // 构建模板对象
   var tpl = {
     id: 'tpl_' + Date.now(),
@@ -1785,26 +1785,33 @@ async function saveTemplateToLibrary() {
     extractRow: extRow,
     createdAt: new Date().toISOString()
   };
-  
+
   // 添加到模板库
   if (!state.templateLibrary[platform]) state.templateLibrary[platform] = [];
   state.templateLibrary[platform].push(tpl);
-  
-  // 持久化
-  syncTemplateLibrary();
-  
+
+  // V51: 持久化（立即保存 + 验证）
+  var saveResult = syncTemplateLibrary();
+
   // 也更新 state.templates（兼容旧代码）
   state.templates[platform] = tpl;
-  
+
   // 设为当前活动模板
   state.activeTemplateId[platform] = tpl.id;
-  
+
   closeTemplateSaveModal();
   renderTemplateLibrary();
   updateTemplateSelector();
   onActiveTemplateChange(); // 自动选中并展开字段配置
-  
-  showToast('✅ 模板「' + name + '」已保存到模板库', 'success');
+
+  // V51: 根据保存结果显示不同提示
+  if (saveResult === 'full') {
+    showToast('✅ 模板「' + name + '」已保存（含完整文件数据）', 'success');
+  } else if (saveResult === 'light') {
+    showToast('⚠️ 模板「' + name + '」已保存（本地缓存已满，刷新后需联网恢复文件数据）', 'warn', 4000);
+  } else {
+    showToast('⚠️ 模板「' + name + '」已保存到内存（本地存储异常，刷新后可能丢失，请尽快保存为方案）', 'error', 5000);
+  }
 }
 
 // V45: 渲染模板库列表
@@ -2307,6 +2314,7 @@ function safeSetLS(key, value, fallbackValue) {
 
 // V45: 模板库持久化
 // V48: 增加 QuotaExceededError 检测 + Supabase Storage 云端备份
+// V48: 同步模板库到 localStorage + 云端备份（V51: 返回保存状态）
 function syncTemplateLibrary() {
   // 为每个模板生成 base64 rawData 用于 localStorage
   var libForStore = {};
@@ -2314,16 +2322,28 @@ function syncTemplateLibrary() {
   var totalRaws = 0;
   ['shopee', 'lazada', 'tiktok'].forEach(function(plat) {
     libForStore[plat] = (state.templateLibrary[plat] || []).map(function(tpl) {
-      var rawB64 = tpl.rawData ? arrayBufferToBase64(tpl.rawData) : '';
-      totalRaws += rawB64.length;
-      return {
-        id: tpl.id, name: tpl.name, filename: tpl.filename,
-        sheetNames: tpl.sheetNames, config: tpl.config,
-        extractSheet: tpl.extractSheet, extractRow: tpl.extractRow,
-        fields: tpl.fields, data: tpl.data,
-        rawData_base64: rawB64,
-        createdAt: tpl.createdAt
-      };
+      try {
+        var rawB64 = tpl.rawData ? arrayBufferToBase64(tpl.rawData) : '';
+        totalRaws += rawB64.length;
+        return {
+          id: tpl.id, name: tpl.name, filename: tpl.filename,
+          sheetNames: tpl.sheetNames, config: tpl.config,
+          extractSheet: tpl.extractSheet, extractRow: tpl.extractRow,
+          fields: tpl.fields, data: tpl.data,
+          rawData_base64: rawB64,
+          createdAt: tpl.createdAt
+        };
+      } catch(e) {
+        console.warn('⚠️ 模板 base64 编码失败:', tpl.name, e.message);
+        return {
+          id: tpl.id, name: tpl.name, filename: tpl.filename,
+          sheetNames: tpl.sheetNames, config: tpl.config,
+          extractSheet: tpl.extractSheet, extractRow: tpl.extractRow,
+          fields: tpl.fields, data: tpl.data,
+          rawData_base64: '',
+          createdAt: tpl.createdAt
+        };
+      }
     });
     libForStoreLight[plat] = (libForStore[plat] || []).map(function(tpl) {
       return { id: tpl.id, name: tpl.name, filename: tpl.filename,
@@ -2333,10 +2353,37 @@ function syncTemplateLibrary() {
     });
   });
   var fullJson = JSON.stringify(libForStore);
-  var ok = safeSetLS('ecom_template_library', fullJson, JSON.stringify(libForStoreLight));
-  if (!ok) {
-    showToast('⚠️ 本地缓存已满，模板文件仅保留索引（刷新后需联网恢复）', 'warn');
+  var lightJson = JSON.stringify(libForStoreLight);
+  var saveStatus = 'none';
+
+  // V51: 尝试保存完整版
+  try {
+    localStorage.setItem('ecom_template_library', fullJson);
+    saveStatus = 'full';
+  } catch(e) {
+    if (e.name === 'QuotaExceededError' || e.code === 22 || e.toString().indexOf('quota') > -1) {
+      console.warn('⚠️ localStorage 配额溢出: ecom_template_library | 完整数据约:', Math.round(fullJson.length/1024), 'KB');
+      // V51: 尝试保存精简版
+      try {
+        localStorage.setItem('ecom_template_library', lightJson);
+        saveStatus = 'light';
+        console.log('💾 已降级保存精简模板库（不含文件数据）, 大小:', Math.round(lightJson.length/1024), 'KB');
+      } catch(e2) {
+        console.error('❌ localStorage 精简版也保存失败:', e2.message);
+        saveStatus = 'none';
+      }
+    } else {
+      console.error('❌ localStorage 保存异常:', e.message);
+      saveStatus = 'none';
+    }
   }
+
+  if (saveStatus === 'light') {
+    showToast('⚠️ 本地缓存已满，模板文件仅保留索引（刷新后需联网恢复）', 'warn', 3000);
+  } else if (saveStatus === 'none') {
+    showToast('❌ 本地存储异常，模板未持久化（刷新后可能丢失）', 'error', 4000);
+  }
+
   safeSetLS('ecom_active_template', JSON.stringify(state.activeTemplateId));
 
   // V48: 将模板文件上传到 Supabase Storage 作为云端备份
@@ -2354,14 +2401,16 @@ function syncTemplateLibrary() {
           }).catch(function(err) {
             console.warn('⚠️ 模板云端备份失败:', tpl.id, err.message);
             // V50: 如果 bucket 不存在，尝试创建
-            if (err.message && err.message.includes('Bucket not found')) {
-              ensureBucketExists('ecom-assets');
+            if (err.message && (err.message.includes('Bucket not found') || err.message.indexOf('bucket') > -1)) {
+              ensureBucketExists('ecom-assets').catch(function() {});
             }
           });
         } catch(e) { console.warn('⚠️ 模板云端备份异常:', tpl.id, e.message); }
       });
     });
   }
+
+  return saveStatus;
 }
 
 // V48: 从 Supabase Storage 下载模板文件的云端备份
@@ -2382,19 +2431,34 @@ function loadTemplateLibrary() {
   try {
     var saved = localStorage.getItem('ecom_template_library');
     if (saved) {
-      var lib = JSON.parse(saved);
-      ['shopee', 'lazada', 'tiktok'].forEach(function(plat) {
-        state.templateLibrary[plat] = (lib[plat] || []).map(function(tpl) {
-          return {
-            id: tpl.id, name: tpl.name, filename: tpl.filename,
-            sheetNames: tpl.sheetNames, config: tpl.config,
-            extractSheet: tpl.extractSheet, extractRow: tpl.extractRow,
-            fields: tpl.fields || [], data: tpl.data || [],
-            rawData: tpl.rawData_base64 ? Array.from(new Uint8Array(base64ToArrayBuffer(tpl.rawData_base64))) : null,
-            createdAt: tpl.createdAt
-          };
+      var lib = null;
+      try { lib = JSON.parse(saved); } catch(parseErr) {
+        console.error('❌ ecom_template_library JSON 解析失败（数据可能损坏）:', parseErr.message);
+        // V51: 数据损坏时清除，避免后续全部失败
+        localStorage.removeItem('ecom_template_library');
+        saved = null;
+      }
+      if (lib) {
+        ['shopee', 'lazada', 'tiktok'].forEach(function(plat) {
+          state.templateLibrary[plat] = (lib[plat] || []).map(function(tpl) {
+            var rawData = null;
+            // V51: 安全解码 base64 rawData
+            if (tpl.rawData_base64 && tpl.rawData_base64.length > 0) {
+              try { rawData = Array.from(new Uint8Array(base64ToArrayBuffer(tpl.rawData_base64))); } catch(decodeErr) {
+                console.warn('⚠️ 模板 rawData 解码失败:', tpl.name, decodeErr.message);
+              }
+            }
+            return {
+              id: tpl.id, name: tpl.name, filename: tpl.filename,
+              sheetNames: tpl.sheetNames, config: tpl.config,
+              extractSheet: tpl.extractSheet, extractRow: tpl.extractRow,
+              fields: tpl.fields || [], data: tpl.data || [],
+              rawData: rawData,
+              createdAt: tpl.createdAt
+            };
+          });
         });
-      });
+      }
     }
     var active = localStorage.getItem('ecom_active_template');
     if (active) {
@@ -2405,8 +2469,8 @@ function loadTemplateLibrary() {
         });
       } catch(e) {}
     }
-    console.log('Template library loaded:', 
-      state.templateLibrary.shopee.length + '/' + state.templateLibrary.lazada.length + '/' + state.templateLibrary.tiktok.length);
+    var totalTpls = (state.templateLibrary.shopee||[]).length + (state.templateLibrary.lazada||[]).length + (state.templateLibrary.tiktok||[]).length;
+    console.log('📦 Template library loaded:', totalTpls, 'templates');
   } catch(e) {
     console.warn('Template library load failed:', e.message);
   }
@@ -2486,24 +2550,30 @@ function reconstructSchemeRawDataFromLibrary() {
   });
 }
 
-// V50: 确保 Supabase Storage bucket 存在（anon 权限无法创建，仅尝试）
+// V50: 确保 Supabase Storage bucket 存在（V51: 完全静默，任何错误不抛出）
 async function ensureBucketExists(bucketName) {
   if (!sb) return;
   try {
-    // 检查 bucket 是否存在
+    // 检查 bucket 是否存在（V51: listBuckets 可能因权限问题失败，视为不存在即可）
     var { data, error } = await sb.storage.listBuckets();
     if (!error && data) {
       var exists = data.some(function(b) { return b.name === bucketName; });
       if (exists) return;
     }
-    // 尝试创建 bucket（anon key 可能无权限，仅尝试）
+  } catch(e) {
+    // listBuckets 失败（权限不足等），静默继续尝试创建
+    console.log('📦 listBuckets 检查失败，尝试直接创建:', bucketName);
+  }
+  try {
+    // 尝试创建 bucket（anon key 通常无权限，仅尝试）
     await sb.storage.createBucket(bucketName, {
       public: false,
       fileSizeLimit: 10485760 // 10MB
     });
     console.log('📦 Bucket 已创建:', bucketName);
   } catch(e) {
-    console.warn('⚠️ 无法创建 bucket（需要在 Supabase Dashboard 手动创建）:', bucketName, e.message);
+    // 静默忽略 — 用户需要在 Dashboard 手动创建
+    console.warn('📦 无法自动创建 bucket（需手动在 Supabase Dashboard 创建）:', bucketName, e.message);
   }
 }
 
@@ -5835,7 +5905,7 @@ function importConfig(input) {
 // =============================================
 // Toast
 // =============================================
-function showToast(msg, type = 'info') {
+function showToast(msg, type = 'info', duration = 3000) {
   const container = document.getElementById('toastContainer');
   if (!container) { console.warn('[Toast]', msg); return; }
   const icons = { success:'✓', error:'✕', warn:'⚠', info:'ℹ' };
@@ -5843,7 +5913,7 @@ function showToast(msg, type = 'info') {
   toast.className = 'toast ' + type;
   toast.innerHTML = `<span>${icons[type]||''}</span><span>${escHtml(msg)}</span>`;
   container.appendChild(toast);
-  setTimeout(() => { toast.style.opacity='0'; toast.style.transition='opacity .3s'; setTimeout(()=>toast.remove(),300); }, 3000);
+  setTimeout(() => { toast.style.opacity='0'; toast.style.transition='opacity .3s'; setTimeout(()=>toast.remove(),300); }, duration);
 }
 
 // =============================================
@@ -8254,24 +8324,63 @@ window.__diagExport = function() {
 };
 
 document.addEventListener('DOMContentLoaded', async () => {
+  // V51: 分步初始化，每步独立 try-catch，避免一步失败导致全部不可用
+  var initErrors = [];
+
+  // 步骤1: 检查 ExcelJS
   try {
-  // 检查 ExcelJS 是否加载成功
-  console.log('🔍 ExcelJS 加载状态:', typeof ExcelJS !== 'undefined' ? '✅ 已加载 (v' + (ExcelJS.Workbook ? 'OK' : 'partial') + ')' : '❌ 未加载');
-  if (typeof ExcelJS === 'undefined') {
-    console.warn('⚠️ ExcelJS 未加载，导出将使用 XLSX 备用方式（格式可能不保留）');
+    console.log('🔍 ExcelJS 加载状态:', typeof ExcelJS !== 'undefined' ? '✅ 已加载 (v' + (ExcelJS.Workbook ? 'OK' : 'partial') + ')' : '❌ 未加载');
+    if (typeof ExcelJS === 'undefined') {
+      console.warn('⚠️ ExcelJS 未加载，导出将使用 XLSX 备用方式（格式可能不保留）');
+    }
+  } catch(e) { initErrors.push('ExcelJS检查: ' + e.message); }
+
+  // 步骤2: 显示加载状态
+  try {
+    showToast(sb ? '正在从云端加载数据…' : '云端未连接，使用离线模式', 'info');
+  } catch(e) { initErrors.push('Toast显示: ' + e.message); }
+
+  // 步骤3: 加载草稿数据（Supabase + localStorage）
+  try {
+    await loadDraft();
+  } catch(e) {
+    console.error('❌ loadDraft 失败:', e);
+    initErrors.push('草稿加载: ' + e.message);
   }
 
-  // 显示加载状态
-  showToast(sb ? '正在从云端加载数据…' : '云端未连接，使用离线模式', 'info');
-  await loadDraft();
-  restoreTemplateFromLocalStorage();
-  // V48: 异步从云端恢复缺失的模板 rawData（localStorage 满时降级存储不含文件）
-  await restoreMissingTemplateRawData();
-  // V48: 从已恢复的模板库重建方案的 template_rawdata
-  reconstructSchemeRawDataFromLibrary();
-  loadTitlePartDefs();
-  document.querySelectorAll('.toast').forEach(t => t.remove());
-  // V50: 恢复上次活跃页面（修复刷新后产品列表"消失"的问题）
+  // 步骤4: 恢复模板库（localStorage）
+  try {
+    restoreTemplateFromLocalStorage();
+  } catch(e) {
+    console.error('❌ restoreTemplateFromLocalStorage 失败:', e);
+    initErrors.push('模板恢复: ' + e.message);
+  }
+
+  // 步骤5: 从云端恢复缺失的模板 rawData（异步）
+  try {
+    await restoreMissingTemplateRawData();
+  } catch(e) {
+    console.error('❌ restoreMissingTemplateRawData 失败:', e);
+    initErrors.push('云端模板恢复: ' + e.message);
+  }
+
+  // 步骤6: 从已恢复的模板库重建方案的 template_rawdata
+  try {
+    reconstructSchemeRawDataFromLibrary();
+  } catch(e) {
+    console.error('❌ reconstructSchemeRawDataFromLibrary 失败:', e);
+    initErrors.push('方案重建: ' + e.message);
+  }
+
+  // 步骤7: 加载标题部件定义
+  try {
+    loadTitlePartDefs();
+  } catch(e) { initErrors.push('标题定义: ' + e.message); }
+
+  // 步骤8: 清除加载提示
+  try { document.querySelectorAll('.toast').forEach(t => t.remove()); } catch(e) {}
+
+  // 步骤9: 恢复上次活跃页面
   try {
     var lastPage = localStorage.getItem('ecom_last_active_page');
     if (lastPage && document.getElementById('page-' + lastPage)) {
@@ -8285,23 +8394,30 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
       if (lastPage === 'export-preview') refreshPreview();
     }
-  } catch(e) {}
-  // 设置去水印页面的拖拽上传
-  setupWmDragDrop();
-  // 设置图片裁剪页面的拖拽上传
-  setupBeDragDrop();
-  // V44: 设置图片+LOGO页面的拖拽上传
-  setupLoDragDrop();
-  // 设置初始同步状态
-  setSyncStatus(sb ? 'idle' : 'offline');
-  // V50: 确保必要的 Storage buckets 存在
+  } catch(e) { initErrors.push('页面恢复: ' + e.message); }
+
+  // 步骤10: 各页面拖拽初始化
+  try { setupWmDragDrop(); } catch(e) { initErrors.push('去水印拖拽: ' + e.message); }
+  try { setupBeDragDrop(); } catch(e) { initErrors.push('裁剪拖拽: ' + e.message); }
+  try { setupLoDragDrop(); } catch(e) { initErrors.push('Logo拖拽: ' + e.message); }
+
+  // 步骤11: 同步状态
+  try { setSyncStatus(sb ? 'idle' : 'offline'); } catch(e) {}
+
+  // 步骤12: 确保 Storage bucket 存在（V51: 完全静默，不阻塞）
   if (sb) {
-    ensureBucketExists('ecom-assets');
-    ensureBucketExists('product-images');
+    ensureBucketExists('ecom-assets').catch(function(e) {
+      console.warn('⚠️ ensureBucketExists(ecom-assets):', e.message);
+    });
+    ensureBucketExists('product-images').catch(function(e) {
+      console.warn('⚠️ ensureBucketExists(product-images):', e.message);
+    });
   }
-  } catch(initErr) {
-    console.error('❌ 初始化异常:', initErr);
-    showToast('页面初始化异常，部分功能可能不可用', 'error');
+
+  // 报告初始化错误（如有）
+  if (initErrors.length > 0) {
+    console.error('❌ 初始化异常步骤:', initErrors);
+    showToast('页面部分功能初始化异常（' + initErrors.length + '项），大部分功能正常可用', 'error', 5000);
   }
 });
 </script>
