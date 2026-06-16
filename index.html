@@ -202,7 +202,9 @@
                      display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: .85rem; flex-shrink: 0; }
     .img-thumbs { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
     .img-thumb { width: 80px; height: 80px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); }
-    .img-thumb-wrap { position: relative; display: inline-block; }
+    .img-thumb-wrap { position: relative; display: inline-block; cursor: grab; }
+    .img-thumb-wrap.dragging { opacity: 0.4; transform: scale(0.9); }
+    .img-thumb-wrap:active { cursor: grabbing; }
     .img-thumb-wrap .rm-img { position: absolute; top: -5px; right: -5px; width: 18px; height: 18px;
                                background: var(--danger); color: #fff; border-radius: 50%;
                                display: flex; align-items: center; justify-content: center;
@@ -711,6 +713,7 @@
             <button class="btn btn-primary btn-sm" onclick="exportSelectedProducts()">📤 导出选中产品组</button>
           </span>
           <button class="btn btn-outline btn-sm" onclick="refreshPreview()">刷新预览</button>
+          <button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger)" onclick="clearAllProductImages()">🗑 清除所有图片</button>
           <button class="btn btn-success" onclick="startAsyncExport()">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             导出全部
@@ -1161,7 +1164,7 @@ const MAX_IMG_PER_GROUP = 9;
 // =============================================
 // Supabase 初始化（容错：CDN 加载失败不影响核心功能）
 // =============================================
-console.log('🛠 批量上架工具 V47 | 2026-06-12 | 产品→产品组重构 | 预览同步跟踪 | 从预览移除 | Telea FMM | JSZip');
+console.log('🛠 批量上架工具 V50 | 2026-06-12 | 7大BUG修复 | 页面记忆 | 方案共享 | 图片拖拽 | 清除图床 | 持久化审计');
 // =============================================
 const SUPABASE_URL = 'https://khrppyhcjzkkokyhnhhd.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtocnBweWhjanpra29reWhuaGhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwNzY1NDEsImV4cCI6MjA5NjY1MjU0MX0.uS9YablBNwjUmQlwRbLRw3SEPNgEnO1Uc6Poe1SeB88';
@@ -1467,12 +1470,41 @@ const state = {
 function restoreTemplateFromLocalStorage() {
   // V45: 先加载模板库
   loadTemplateLibrary();
-  
+
   var platform = state.platform;
   var lib = state.templateLibrary[platform] || [];
   var activeId = state.activeTemplateId[platform];
   var activeTpl = activeId ? lib.find(function(t) { return t.id === activeId; }) : null;
-  
+
+  // V50: 如果模板库为空但有 Supabase 方案，从方案恢复模板到模板库
+  if (lib.length === 0 && sb && state.configSchemes[platform] && state.configSchemes[platform].length > 0) {
+    console.log('📦 V50: 模板库为空，尝试从方案恢复模板…');
+    state.configSchemes[platform].forEach(function(scheme) {
+      if (scheme.template_library_id) {
+        var tpl = {
+          id: scheme.template_library_id,
+          name: scheme.scheme_name,
+          filename: scheme.template_filename || '云端方案模板',
+          sheetNames: (scheme.template_meta && scheme.template_meta.sheetNames) || [],
+          config: (scheme.template_meta && scheme.template_meta.config) || { sheetName: 'Sheet1', dataStartRow: 6 },
+          extractSheet: (scheme.template_meta && scheme.template_meta.extractSheet) || 'Sheet1',
+          extractRow: (scheme.template_meta && scheme.template_meta.extractRow) || 1,
+          fields: scheme.field_configs || [],
+          data: scheme.template_data?.length > 0 ? scheme.template_data : [],
+          rawData: scheme.template_rawdata ? Array.from(new Uint8Array(base64ToArrayBuffer(scheme.template_rawdata))) : null,
+          createdAt: scheme.created_at
+        };
+        if (!state.templateLibrary[platform].some(function(t) { return t.id === tpl.id; })) {
+          state.templateLibrary[platform].push(tpl);
+          console.log('📦 V50: 从方案恢复模板:', tpl.name);
+        }
+      }
+    });
+    lib = state.templateLibrary[platform];
+    activeId = state.activeTemplateId[platform];
+    activeTpl = activeId ? lib.find(function(t) { return t.id === activeId; }) : null;
+  }
+
   // 如果有活动模板，设置 state.templates
   if (activeTpl) {
     state.templates[platform] = activeTpl;
@@ -1483,12 +1515,12 @@ function restoreTemplateFromLocalStorage() {
     state.activeTemplateId[platform] = lib[0].id;
     console.log('📦 默认使用第一个模板:', lib[0].name);
   }
-  
+
   // Legacy fallback: 如果模板库为空，尝试从旧 localStorage keys 恢复
   if (lib.length === 0) {
     migrateLegacyTemplate(platform);
   }
-  
+
   // 恢复模板库UI
   if (platform === state.platform) {
     renderTemplateLibrary();
@@ -1609,6 +1641,8 @@ function showPage(page, el) {
   document.getElementById('page-' + page).classList.add('active');
   if (el) el.classList.add('active');
   if (page === 'export-preview') refreshPreview();
+  // V50: 记住上次活跃页面，刷新后恢复
+  try { localStorage.setItem('ecom_last_active_page', page); } catch(e) {}
 }
 
 // =============================================
@@ -2319,6 +2353,10 @@ function syncTemplateLibrary() {
             console.log('📦 模板已备份到云端:', tpl.id, tpl.name);
           }).catch(function(err) {
             console.warn('⚠️ 模板云端备份失败:', tpl.id, err.message);
+            // V50: 如果 bucket 不存在，尝试创建
+            if (err.message && err.message.includes('Bucket not found')) {
+              ensureBucketExists('ecom-assets');
+            }
           });
         } catch(e) { console.warn('⚠️ 模板云端备份异常:', tpl.id, e.message); }
       });
@@ -2375,6 +2413,7 @@ function loadTemplateLibrary() {
 }
 
 // V48: 异步恢复缺失的 rawData（从云端下载）
+// V50: 增加从方案 template_storage_path 恢复的能力
 async function restoreMissingTemplateRawData() {
   if (!sb) return;
   var promises = [];
@@ -2385,12 +2424,27 @@ async function restoreMissingTemplateRawData() {
           loadTemplateRawFromCloud(plat, tpl.id).then(function(rawArr) {
             if (rawArr) {
               tpl.rawData = rawArr;
-              // 同时更新 state.templates
               if (state.templates[plat] && state.templates[plat].id === tpl.id) {
                 state.templates[plat].rawData = rawArr;
               }
             }
           })
+        );
+      }
+    });
+    // V50: 也检查方案中 template_storage_path 引用的文件
+    (state.configSchemes[plat] || []).forEach(function(scheme) {
+      if (!scheme.template_rawdata && scheme.template_storage_path) {
+        promises.push(
+          (async function() {
+            try {
+              var { data, error } = await sb.storage.from('ecom-assets').download(scheme.template_storage_path);
+              if (error) { console.warn('V50 方案模板 Storage 下载失败:', scheme.template_storage_path, error.message); return; }
+              var buf = await data.arrayBuffer();
+              scheme.template_rawdata = arrayBufferToBase64(buf);
+              console.log('V50 从 Storage 恢复方案 rawData:', scheme.scheme_name, scheme.template_storage_path);
+            } catch(e) { console.warn('V50 方案模板 Storage 下载异常:', e.message); }
+          })()
         );
       }
     });
@@ -2430,6 +2484,27 @@ function reconstructSchemeRawDataFromLibrary() {
     });
     if (fixedCount > 0) console.log('📋 ' + plat + ' 平台修复了 ' + fixedCount + ' 个方案的 rawData');
   });
+}
+
+// V50: 确保 Supabase Storage bucket 存在（anon 权限无法创建，仅尝试）
+async function ensureBucketExists(bucketName) {
+  if (!sb) return;
+  try {
+    // 检查 bucket 是否存在
+    var { data, error } = await sb.storage.listBuckets();
+    if (!error && data) {
+      var exists = data.some(function(b) { return b.name === bucketName; });
+      if (exists) return;
+    }
+    // 尝试创建 bucket（anon key 可能无权限，仅尝试）
+    await sb.storage.createBucket(bucketName, {
+      public: false,
+      fileSizeLimit: 10485760 // 10MB
+    });
+    console.log('📦 Bucket 已创建:', bucketName);
+  } catch(e) {
+    console.warn('⚠️ 无法创建 bucket（需要在 Supabase Dashboard 手动创建）:', bucketName, e.message);
+  }
 }
 
 function processTemplate(data, filename) {
@@ -2777,14 +2852,12 @@ async function saveAsScheme() {
   if (!tpl) { showToast('请先导入模板', 'warn'); return; }
 
   // V41: 直接使用 state.templates[platform].rawData 编码，不依赖 localStorage
-  // 因为 localStorage 可能被其他模板加载操作覆盖
   var templateRawData = null;
   try {
     if (tpl.rawData && tpl.rawData.length > 0) {
       templateRawData = arrayBufferToBase64(tpl.rawData);
       console.log('📋 saveAsScheme: 从 state.templates[' + platform + '].rawData 编码, 长度=' + templateRawData.length);
     } else {
-      // 回退到 localStorage（兼容旧数据）
       templateRawData = localStorage.getItem('tpl_raw_' + platform);
       console.log('📋 saveAsScheme: state.templates[' + platform + '].rawData 为空，回退 localStorage, 长度=' + (templateRawData||'').length);
     }
@@ -2802,7 +2875,7 @@ async function saveAsScheme() {
     platform,
     scheme_name: name,
     template_filename: tpl.filename || null,
-    template_library_id: state.activeTemplateId[platform] || '',  // V45
+    template_library_id: state.activeTemplateId[platform] || '',
     template_headers: tpl.data?.[0] || [],
     template_data: tpl.data?.slice(0, 5) || [],
     template_rawdata: templateRawData || null,
@@ -2825,7 +2898,7 @@ async function saveAsScheme() {
     updateCurrentSchemeBadge();
     renderSchemeList();
     document.getElementById('newSchemeName').value = '';
-    // V48: 保存到 localStorage 时去掉冗余的 template_rawdata（模板文件已通过模板库 + 云端备份持久化）
+    // V48: 保存到 localStorage 时去掉冗余的 template_rawdata
     try {
       var localSchemes = JSON.parse(JSON.stringify(state.configSchemes));
       Object.keys(localSchemes).forEach(function(p) {
@@ -2836,24 +2909,67 @@ async function saveAsScheme() {
     showToast('方案「' + name + '」已保存（含模板文件）', 'success');
   } catch(e) {
     console.error('Save scheme error:', e);
-    // 降级 localStorage
-    if (!state.configSchemes[platform]) state.configSchemes[platform] = [];
-    scheme.id = Date.now();
-    scheme.created_at = new Date().toISOString();
-    scheme.updated_at = new Date().toISOString();
-    state.configSchemes[platform].push(scheme);
-    state.currentSchemeName[platform] = name;
-    state.currentSchemeId[platform] = scheme.id;
-    updateCurrentSchemeBadge();
-    renderSchemeList();
-    document.getElementById('newSchemeName').value = '';
-    // V48: 去掉冗余的 template_rawdata
-    var localSchemes = JSON.parse(JSON.stringify(state.configSchemes));
-    Object.keys(localSchemes).forEach(function(p) {
-      (localSchemes[p] || []).forEach(function(s) { delete s.template_rawdata; });
-    });
-    safeSetLS('ecom_schemes_fallback', JSON.stringify(localSchemes));
-    showToast('方案已本地保存（含模板文件，云端暂不可用）', 'warn');
+    // V50: 如果因数据过大失败，尝试将 template_rawdata 存到 Storage 后仅存引用
+    var originalError = e;
+    var savedToStorage = false;
+    if (templateRawData && templateRawData.length > 100000 && sb) {
+      try {
+        var tplIdForStorage = state.activeTemplateId[platform] || ('scheme_' + Date.now());
+        var rawBuf = base64ToArrayBuffer(templateRawData);
+        var uploadResult = await sb.storage.from('ecom-assets').upload('scheme-rawdata/' + platform + '/' + tplIdForStorage + '.xlsx', rawBuf, {
+          contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          upsert: true
+        });
+        // 上传成功后，去掉 template_rawdata 重新保存方案
+        scheme.template_rawdata = null;
+        scheme.template_storage_path = 'scheme-rawdata/' + platform + '/' + tplIdForStorage + '.xlsx';
+        const { data: data2, error: err2 } = await sb.from('ecom_config_schemes').insert(scheme).select('id').single();
+        if (!err2 && data2) {
+          scheme.id = data2.id;
+          scheme.created_at = new Date().toISOString();
+          scheme.updated_at = new Date().toISOString();
+          if (!state.configSchemes[platform]) state.configSchemes[platform] = [];
+          state.configSchemes[platform].push(scheme);
+          state.currentSchemeName[platform] = name;
+          state.currentSchemeId[platform] = scheme.id;
+          updateCurrentSchemeBadge();
+          renderSchemeList();
+          document.getElementById('newSchemeName').value = '';
+          // localStorage 不存 template_rawdata
+          try {
+            var localSchemes = JSON.parse(JSON.stringify(state.configSchemes));
+            Object.keys(localSchemes).forEach(function(p) {
+              (localSchemes[p] || []).forEach(function(s) { delete s.template_rawdata; });
+            });
+            safeSetLS('ecom_schemes_fallback', JSON.stringify(localSchemes));
+          } catch(lsErr) {}
+          showToast('方案「' + name + '」已保存（模板文件已上传云端，多人可共享）', 'success');
+          savedToStorage = true;
+        }
+      } catch(storageErr) {
+        console.warn('V50 方案模板上传到 Storage 失败:', storageErr.message);
+      }
+    }
+    if (!savedToStorage) {
+      // 最终降级 localStorage（不共享，仅本地）
+      console.warn('方案保存完全失败，降级 localStorage:', originalError.message);
+      if (!state.configSchemes[platform]) state.configSchemes[platform] = [];
+      scheme.id = Date.now();
+      scheme.created_at = new Date().toISOString();
+      scheme.updated_at = new Date().toISOString();
+      state.configSchemes[platform].push(scheme);
+      state.currentSchemeName[platform] = name;
+      state.currentSchemeId[platform] = scheme.id;
+      updateCurrentSchemeBadge();
+      renderSchemeList();
+      document.getElementById('newSchemeName').value = '';
+      var localSchemes = JSON.parse(JSON.stringify(state.configSchemes));
+      Object.keys(localSchemes).forEach(function(p) {
+        (localSchemes[p] || []).forEach(function(s) { delete s.template_rawdata; });
+      });
+      safeSetLS('ecom_schemes_fallback', JSON.stringify(localSchemes));
+      showToast('方案已本地保存（含模板文件，云端暂不可用）', 'warn');
+    }
   }
 }
 
@@ -3597,7 +3713,10 @@ function renderImgGroups(idx) {
         </div>
         <div class="img-thumbs">
           ${g.files.map((f, fi) => `
-            <div class="img-thumb-wrap">
+            <div class="img-thumb-wrap" draggable="true"
+                 ondragstart="imgDragStart(event,${idx},${gi},${fi},'group')"
+                 ondragover="imgDragOver(event)"
+                 ondrop="imgDrop(event,${idx},${gi},${fi},'group')">
               <img class="img-thumb" src="${f.dataUrl}" title="${escHtml(f.name)}" />
               <span class="rm-img" onclick="removeImgFromGroup(${idx},${gi},${fi})">×</span>
             </div>`).join('')}
@@ -3611,6 +3730,43 @@ function renderImgGroups(idx) {
         </div>
       </div>`;
   }).join('');
+}
+
+// V50: 图片拖拽排序辅助变量
+var _imgDrag = { idx: -1, gi: -1, fi: -1, type: '' };
+
+function imgDragStart(e, idx, gi, fi, type) {
+  _imgDrag = { idx: idx, gi: gi, fi: fi, type: type };
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', '');
+  e.target.closest('.img-thumb-wrap')?.classList.add('dragging');
+}
+
+function imgDragOver(e) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+}
+
+function imgDrop(e, targetIdx, targetGi, targetFi, targetType) {
+  e.preventDefault();
+  document.querySelectorAll('.img-thumb-wrap.dragging').forEach(el => el.classList.remove('dragging'));
+  if (_imgDrag.idx !== targetIdx) return;
+
+  var product = state.products[state.platform][_imgDrag.idx];
+  if (_imgDrag.type === 'group' && targetType === 'group') {
+    if (_imgDrag.gi === targetGi && _imgDrag.fi === targetFi) return;
+    var files = product.images[_imgDrag.gi].files;
+    var moved = files.splice(_imgDrag.fi, 1)[0];
+    product.images[targetGi].files.splice(targetFi, 0, moved);
+    document.getElementById('imgGroupsContainer_' + targetIdx).innerHTML = renderImgGroups(targetIdx);
+  } else if (_imgDrag.type === 'fixed' && targetType === 'fixed') {
+    if (_imgDrag.fi === targetFi) return;
+    var imgs = product.fixedDetailImages;
+    var moved = imgs.splice(_imgDrag.fi, 1)[0];
+    imgs.splice(targetFi, 0, moved);
+    document.getElementById('fixedDetailArea_' + targetIdx).innerHTML = renderFixedDetailImages(targetIdx);
+  }
+  renderProductList();
 }
 
 function addImgGroup(idx) {
@@ -3701,7 +3857,10 @@ function renderFixedDetailImages(idx) {
   const product = state.products[state.platform][idx];
   const imgs = product.fixedDetailImages || [];
   let html = imgs.map((f, fi) => `
-    <div class="img-thumb-wrap">
+    <div class="img-thumb-wrap" draggable="true"
+         ondragstart="imgDragStart(event,${idx},-1,${fi},'fixed')"
+         ondragover="imgDragOver(event)"
+         ondrop="imgDrop(event,${idx},-1,${fi},'fixed')">
       <img class="img-thumb" src="${f.dataUrl}" title="${escHtml(f.name)}" />
       <span class="rm-img" onclick="removeFixedDetail(${idx},${fi})">×</span>
     </div>`).join('');
@@ -4479,6 +4638,69 @@ async function _exportWithProducts(filteredProducts) {
     }
     _currentExportRecordId = null;
   }, 30);
+}
+
+// =============================================
+// V50: 清除 product-images 图床中的所有图片
+// =============================================
+async function clearAllProductImages() {
+  if (!sb) { showToast('云端未连接，无法清除图片', 'error'); return; }
+  if (!confirm('确定要清除图床中的所有图片吗？\n\n此操作将删除 product-images 存储桶中的全部文件，以释放空间。\n已上传的图片链接将失效，但产品组中的本地图片数据不受影响。')) return;
+
+  try {
+    showToast('正在扫描图床文件…', 'info');
+    var allFiles = [];
+    var page = 0;
+    var pageSize = 1000;
+    while (true) {
+      var { data, error } = await sb.storage.from('product-images').list('', {
+        limit: pageSize,
+        offset: page * pageSize
+      });
+      if (error) throw error;
+      if (!data || data.length === 0) break;
+      allFiles = allFiles.concat(data);
+      page++;
+      if (data.length < pageSize) break;
+    }
+
+    if (allFiles.length === 0) {
+      showToast('图床中没有需要清除的图片', 'info');
+      return;
+    }
+
+    showToast('正在删除 ' + allFiles.length + ' 个文件…', 'info');
+    var deleted = 0;
+    var failed = 0;
+    // 批量删除（每批 100 个）
+    var batchSize = 100;
+    for (var i = 0; i < allFiles.length; i += batchSize) {
+      var batch = allFiles.slice(i, i + batchSize);
+      var pathsToRemove = batch.map(function(f) { return f.name; });
+      try {
+        var { error: delErr } = await sb.storage.from('product-images').remove(pathsToRemove);
+        if (delErr) {
+          // 如果批量删除失败，逐个删除
+          for (var j = 0; j < pathsToRemove.length; j++) {
+            try {
+              await sb.storage.from('product-images').remove([pathsToRemove[j]]);
+              deleted++;
+            } catch(e2) { failed++; }
+          }
+        } else {
+          deleted += batch.length;
+        }
+      } catch(e) {
+        failed += batch.length;
+      }
+    }
+
+    showToast('清除完成：删除 ' + deleted + ' 个' + (failed > 0 ? '，失败 ' + failed + ' 个' : ''), deleted > 0 ? 'success' : 'warn');
+    console.log('🗑 图床清除完成: 删除=' + deleted + ', 失败=' + failed + ', 总计=' + allFiles.length);
+  } catch(e) {
+    console.error('清除图床失败:', e);
+    showToast('清除失败: ' + e.message, 'error');
+  }
 }
 
 // =============================================
@@ -5458,11 +5680,23 @@ async function loadDraft() {
       } catch(e) { console.warn('loadDraft 方案 rawData 恢复失败:', e.message); }
     }
   }
-  // 标题方案本地恢复
+  // 标题方案本地恢复（V50: 仅在 Supabase 未加载到方案时使用 localStorage 补充）
   try {
     var tSchSaved = localStorage.getItem('ecom_title_schemes_fallback');
     if (tSchSaved) {
-      try { state.titleSchemes = JSON.parse(tSchSaved); } catch(e) {}
+      try {
+        var localTitleSchemes = JSON.parse(tSchSaved);
+        // 合并：用 localTitleSchemes 补充 state.titleSchemes 中缺失的
+        ['shopee', 'lazada', 'tiktok'].forEach(function(p) {
+          if (!state.titleSchemes[p]) state.titleSchemes[p] = [];
+          var dbIds = new Set(state.titleSchemes[p].map(function(s) { return s.id; }));
+          (localTitleSchemes[p] || []).forEach(function(ts) {
+            if (!dbIds.has(ts.id)) {
+              state.titleSchemes[p].push(ts);
+            }
+          });
+        });
+      } catch(e) {}
     }
   } catch(_) {}
   // 恢复当前平台 UI
@@ -8004,7 +8238,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (typeof ExcelJS === 'undefined') {
     console.warn('⚠️ ExcelJS 未加载，导出将使用 XLSX 备用方式（格式可能不保留）');
   }
-  
+
   // 显示加载状态
   showToast(sb ? '正在从云端加载数据…' : '云端未连接，使用离线模式', 'info');
   await loadDraft();
@@ -8015,6 +8249,21 @@ document.addEventListener('DOMContentLoaded', async () => {
   reconstructSchemeRawDataFromLibrary();
   loadTitlePartDefs();
   document.querySelectorAll('.toast').forEach(t => t.remove());
+  // V50: 恢复上次活跃页面（修复刷新后产品列表"消失"的问题）
+  try {
+    var lastPage = localStorage.getItem('ecom_last_active_page');
+    if (lastPage && document.getElementById('page-' + lastPage)) {
+      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('.sidebar-item').forEach(s => s.classList.remove('active'));
+      document.getElementById('page-' + lastPage).classList.add('active');
+      var sideItems = document.querySelectorAll('.sidebar-item');
+      var pageMap = { 'field-config': 0, 'product-info': 1, 'export-preview': 2, 'image-removal': 3, 'image-crop': 4, 'image-logo': 5, 'settings': 6 };
+      if (pageMap[lastPage] !== undefined && sideItems[pageMap[lastPage]]) {
+        sideItems[pageMap[lastPage]].classList.add('active');
+      }
+      if (lastPage === 'export-preview') refreshPreview();
+    }
+  } catch(e) {}
   // 设置去水印页面的拖拽上传
   setupWmDragDrop();
   // 设置图片裁剪页面的拖拽上传
@@ -8023,6 +8272,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   setupLoDragDrop();
   // 设置初始同步状态
   setSyncStatus(sb ? 'idle' : 'offline');
+  // V50: 确保必要的 Storage buckets 存在
+  if (sb) {
+    ensureBucketExists('ecom-assets');
+    ensureBucketExists('product-images');
+  }
 });
 </script>
 </body>

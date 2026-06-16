@@ -1,96 +1,106 @@
-// =============================================
-// Supabase Edge Function: cleanup-expired-images
-// 功能：删除 product-images bucket 中超过 24 小时的图片
-// 部署方式：supabase functions deploy cleanup-expired-images
-// 自动触发：通过 Supabase Cron 每小时调用一次
-// =============================================
-
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-
 Deno.serve(async (req) => {
-  // 从环境变量获取 Supabase URL 和 Service Role Key
-  // 注意：Edge Function 自动注入 SUPABASE_URL 和 SUPABASE_SERVICE_ROLE_KEY
-  const supabase = createClient(
-    Deno.env.get('SUPABASE_URL') ?? '',
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-  )
+  const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? ''
+  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+
+  if (!supabaseUrl || !serviceRoleKey) {
+    return new Response(JSON.stringify({
+      success: false, error: 'Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY'
+    }), { status: 500, headers: { 'Content-Type': 'application/json' } })
+  }
 
   try {
     const bucketName = 'product-images'
     const expiredHours = 24
-
-    // 计算过期时间点
     const expiredAt = new Date()
     expiredAt.setHours(expiredAt.getHours() - expiredHours)
 
-    // 1. 查询 storage.objects 中超过 24 小时的文件
-    // 注意：需要 service_role 权限才能查询 storage schema
-    const { data: oldFiles, error: queryError } = await supabase
-      .from('storage.objects')
-      .select('id, name, bucket_id')
-      .eq('bucket_id', bucketName)
-      .lt('created_at', expiredAt.toISOString())
-      .limit(500) // 每次最多处理 500 个
+    // 1. Query expired files from storage.objects (requires service_role)
+    const { data: oldFiles, error: queryError } = await fetch(
+      supabaseUrl + '/rest/v1/storage.objects?bucket_id=eq.' + bucketName +
+      '&created_at=lt.' + expiredAt.toISOString() +
+      '&select=id,name,created_at&order=created_at.asc&limit=500',
+      {
+        headers: {
+          'apikey': serviceRoleKey,
+          'Authorization': 'Bearer ' + serviceRoleKey,
+          'Content-Type': 'application/json'
+        }
+      }
+    ).then(r => r.json())
 
     if (queryError) {
-      console.error('查询过期文件失败:', queryError)
+      console.error('Query error:', JSON.stringify(queryError))
       return new Response(JSON.stringify({
-        success: false,
-        error: '查询失败: ' + queryError.message
+        success: false, error: 'Query failed: ' + JSON.stringify(queryError)
       }), { status: 500, headers: { 'Content-Type': 'application/json' } })
     }
 
     if (!oldFiles || oldFiles.length === 0) {
       return new Response(JSON.stringify({
-        success: true,
-        message: '没有过期文件需要清理',
-        deleted: 0
+        success: true, message: 'No expired files to clean up', deleted: 0
       }), { headers: { 'Content-Type': 'application/json' } })
     }
 
-    // 2. 通过 Storage API 删除过期文件（必须用 API 删除，不能直接 SQL 删 storage.objects）
-    const fileNames = oldFiles.map(f => f.name)
-    const { error: deleteError } = await supabase.storage
-      .from(bucketName)
-      .remove(fileNames)
+    const fileNames = oldFiles.map((f: { name: string }) => f.name)
+    console.log(`Found ${fileNames.length} expired files to clean up`)
 
-    if (deleteError) {
-      console.error('删除文件失败:', deleteError)
-      // 尝试逐个删除（批量删除可能有文件已被删）
-      let successCount = 0
-      let failCount = 0
-      for (const fileName of fileNames) {
-        const { error: singleErr } = await supabase.storage
-          .from(bucketName)
-          .remove([fileName])
-        if (singleErr) {
-          failCount++
-        } else {
-          successCount++
+    // 2. Delete via Storage API remove endpoint (batch)
+    const { error: deleteError } = await fetch(
+      supabaseUrl + '/storage/v1/object/' + encodeURIComponent(bucketName) + '/delete',
+      {
+        method: 'POST',
+        headers: {
+          'apikey': serviceRoleKey,
+          'Authorization': 'Bearer ' + serviceRoleKey,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ prefixes: fileNames })
+      }
+    ).then(r => r.json())
+
+    if (deleteError && deleteError.length > 0) {
+      console.warn('Batch delete failed, retrying individually:', JSON.stringify(deleteError))
+      // Fallback: delete one by one via Storage API
+      let deleted = 0
+      let failed = 0
+      for (const name of fileNames) {
+        const res = await fetch(
+          supabaseUrl + '/storage/v1/object/' +
+          encodeURIComponent(bucketName + '/' + name),
+          {
+            method: 'DELETE',
+            headers: {
+              'apikey': serviceRoleKey,
+              'Authorization': 'Bearer ' + serviceRoleKey
+            }
+          }
+        )
+        if (res.ok) deleted++
+        else {
+          failed++
+          console.warn('Failed to delete:', name, await res.text())
         }
       }
       return new Response(JSON.stringify({
-        success: true,
-        message: '部分清理完成（批量删除失败后逐个重试）',
-        deleted: successCount,
-        failed: failCount,
-        total: fileNames.length
+        success: true, message: 'Partial cleanup (batch failed, retried individually)',
+        deleted, failed, total: fileNames.length
       }), { headers: { 'Content-Type': 'application/json' } })
     }
 
-    console.log(`清理完成：删除了 ${fileNames.length} 个过期图片`)
+    console.log(`Cleanup done: deleted ${fileNames.length} expired images`)
 
     return new Response(JSON.stringify({
       success: true,
-      message: '清理完成',
-      deleted: fileNames.length
+      message: `Cleanup complete: deleted ${fileNames.length} files older than ${expiredHours}h`,
+      deleted: fileNames.length,
+      oldestFile: oldFiles[0]?.created_at || null,
+      newestFile: oldFiles[oldFiles.length - 1]?.created_at || null
     }), { headers: { 'Content-Type': 'application/json' } })
 
   } catch (err) {
-    console.error('Edge Function 异常:', err)
+    console.error('Edge Function error:', err)
     return new Response(JSON.stringify({
-      success: false,
-      error: err.message
+      success: false, error: err.message
     }), { status: 500, headers: { 'Content-Type': 'application/json' } })
   }
 })
