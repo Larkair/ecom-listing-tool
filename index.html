@@ -1481,6 +1481,13 @@ function restoreTemplateFromLocalStorage() {
     console.log('📦 V50: 模板库为空，尝试从方案恢复模板…');
     state.configSchemes[platform].forEach(function(scheme) {
       if (scheme.template_library_id) {
+        // V51: 安全解码 base64 rawData（无效数据不阻断其他方案的恢复）
+        var rawData = null;
+        if (scheme.template_rawdata && scheme.template_rawdata.length > 0) {
+          try { rawData = Array.from(new Uint8Array(base64ToArrayBuffer(scheme.template_rawdata))); } catch(decodeErr) {
+            console.warn('⚠️ V50 方案模板 rawData 解码失败:', scheme.scheme_name, decodeErr.message);
+          }
+        }
         var tpl = {
           id: scheme.template_library_id,
           name: scheme.scheme_name,
@@ -1491,12 +1498,12 @@ function restoreTemplateFromLocalStorage() {
           extractRow: (scheme.template_meta && scheme.template_meta.extractRow) || 1,
           fields: scheme.field_configs || [],
           data: scheme.template_data?.length > 0 ? scheme.template_data : [],
-          rawData: scheme.template_rawdata ? Array.from(new Uint8Array(base64ToArrayBuffer(scheme.template_rawdata))) : null,
+          rawData: rawData,
           createdAt: scheme.created_at
         };
         if (!state.templateLibrary[platform].some(function(t) { return t.id === tpl.id; })) {
           state.templateLibrary[platform].push(tpl);
-          console.log('📦 V50: 从方案恢复模板:', tpl.name);
+          console.log('📦 V50: 从方案恢复模板:', tpl.name, '| rawData:', rawData ? (rawData.length + ' bytes') : 'null (待云端下载)');
         }
       }
     });
@@ -8325,7 +8332,8 @@ window.__diagExport = function() {
 
 document.addEventListener('DOMContentLoaded', async () => {
   // V51: 分步初始化，每步独立 try-catch，避免一步失败导致全部不可用
-  var initErrors = [];
+  var initErrors = [];    // 关键错误（影响核心功能）
+  var initWarnings = [];  // 非关键警告（不影响使用）
 
   // 步骤1: 检查 ExcelJS
   try {
@@ -8333,18 +8341,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (typeof ExcelJS === 'undefined') {
       console.warn('⚠️ ExcelJS 未加载，导出将使用 XLSX 备用方式（格式可能不保留）');
     }
-  } catch(e) { initErrors.push('ExcelJS检查: ' + e.message); }
+  } catch(e) { initWarnings.push('ExcelJS检查: ' + e.message); }
 
   // 步骤2: 显示加载状态
   try {
     showToast(sb ? '正在从云端加载数据…' : '云端未连接，使用离线模式', 'info');
-  } catch(e) { initErrors.push('Toast显示: ' + e.message); }
+  } catch(e) { initWarnings.push('Toast显示: ' + e.message); }
 
   // 步骤3: 加载草稿数据（Supabase + localStorage）
   try {
     await loadDraft();
   } catch(e) {
-    console.error('❌ loadDraft 失败:', e);
+    console.error('❌ [步骤3] loadDraft 失败:', e);
     initErrors.push('草稿加载: ' + e.message);
   }
 
@@ -8352,30 +8360,30 @@ document.addEventListener('DOMContentLoaded', async () => {
   try {
     restoreTemplateFromLocalStorage();
   } catch(e) {
-    console.error('❌ restoreTemplateFromLocalStorage 失败:', e);
+    console.error('❌ [步骤4] restoreTemplateFromLocalStorage 失败:', e);
     initErrors.push('模板恢复: ' + e.message);
   }
 
-  // 步骤5: 从云端恢复缺失的模板 rawData（异步）
+  // 步骤5: 从云端恢复缺失的模板 rawData（异步）— 非关键，失败仅意味着需重新上传模板
   try {
     await restoreMissingTemplateRawData();
   } catch(e) {
-    console.error('❌ restoreMissingTemplateRawData 失败:', e);
-    initErrors.push('云端模板恢复: ' + e.message);
+    console.warn('⚠️ [步骤5] 云端模板恢复失败（非关键，可手动上传模板）:', e.message);
+    initWarnings.push('云端模板恢复: ' + e.message);
   }
 
-  // 步骤6: 从已恢复的模板库重建方案的 template_rawdata
+  // 步骤6: 从已恢复的模板库重建方案的 template_rawdata — 非关键
   try {
     reconstructSchemeRawDataFromLibrary();
   } catch(e) {
-    console.error('❌ reconstructSchemeRawDataFromLibrary 失败:', e);
-    initErrors.push('方案重建: ' + e.message);
+    console.warn('⚠️ [步骤6] 方案重建失败（非关键）:', e.message);
+    initWarnings.push('方案重建: ' + e.message);
   }
 
   // 步骤7: 加载标题部件定义
   try {
     loadTitlePartDefs();
-  } catch(e) { initErrors.push('标题定义: ' + e.message); }
+  } catch(e) { initWarnings.push('标题定义: ' + e.message); }
 
   // 步骤8: 清除加载提示
   try { document.querySelectorAll('.toast').forEach(t => t.remove()); } catch(e) {}
@@ -8394,12 +8402,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
       if (lastPage === 'export-preview') refreshPreview();
     }
-  } catch(e) { initErrors.push('页面恢复: ' + e.message); }
+  } catch(e) { initWarnings.push('页面恢复: ' + e.message); }
 
   // 步骤10: 各页面拖拽初始化
-  try { setupWmDragDrop(); } catch(e) { initErrors.push('去水印拖拽: ' + e.message); }
-  try { setupBeDragDrop(); } catch(e) { initErrors.push('裁剪拖拽: ' + e.message); }
-  try { setupLoDragDrop(); } catch(e) { initErrors.push('Logo拖拽: ' + e.message); }
+  try { setupWmDragDrop(); } catch(e) { initWarnings.push('去水印拖拽: ' + e.message); }
+  try { setupBeDragDrop(); } catch(e) { initWarnings.push('裁剪拖拽: ' + e.message); }
+  try { setupLoDragDrop(); } catch(e) { initWarnings.push('Logo拖拽: ' + e.message); }
 
   // 步骤11: 同步状态
   try { setSyncStatus(sb ? 'idle' : 'offline'); } catch(e) {}
@@ -8407,17 +8415,20 @@ document.addEventListener('DOMContentLoaded', async () => {
   // 步骤12: 确保 Storage bucket 存在（V51: 完全静默，不阻塞）
   if (sb) {
     ensureBucketExists('ecom-assets').catch(function(e) {
-      console.warn('⚠️ ensureBucketExists(ecom-assets):', e.message);
+      console.log('ℹ️ Bucket检查(ecom-assets):', e.message || '需手动创建');
     });
     ensureBucketExists('product-images').catch(function(e) {
-      console.warn('⚠️ ensureBucketExists(product-images):', e.message);
+      console.log('ℹ️ Bucket检查(product-images):', e.message || '需手动创建');
     });
   }
 
-  // 报告初始化错误（如有）
+  // 报告初始化结果 — 只有关键错误才显示醒目提示
   if (initErrors.length > 0) {
-    console.error('❌ 初始化异常步骤:', initErrors);
-    showToast('页面部分功能初始化异常（' + initErrors.length + '项），大部分功能正常可用', 'error', 5000);
+    console.error('❌ 初始化关键错误:', initErrors);
+    showToast('页面初始化异常（' + initErrors.length + '项关键错误），部分功能可能不可用', 'error', 5000);
+  } else if (initWarnings.length > 0) {
+    console.log('ℹ️ 初始化非关键警告（不影响正常使用）:', initWarnings);
+    // 非关键警告不显示 toast，避免用户困惑
   }
 });
 </script>
