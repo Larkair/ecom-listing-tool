@@ -2851,17 +2851,14 @@ async function saveAsScheme() {
 
   if (!tpl) { showToast('请先导入模板', 'warn'); return; }
 
-  // V41: 直接使用 state.templates[platform].rawData 编码，不依赖 localStorage
-  var templateRawData = null;
+  // V50-fix: 获取模板 rawData — 将上传到 Storage，不写入 DB（避免 payload 过大）
+  var rawBuf = null;
   try {
     if (tpl.rawData && tpl.rawData.length > 0) {
-      templateRawData = arrayBufferToBase64(tpl.rawData);
-      console.log('📋 saveAsScheme: 从 state.templates[' + platform + '].rawData 编码, 长度=' + templateRawData.length);
-    } else {
-      templateRawData = localStorage.getItem('tpl_raw_' + platform);
-      console.log('📋 saveAsScheme: state.templates[' + platform + '].rawData 为空，回退 localStorage, 长度=' + (templateRawData||'').length);
+      rawBuf = new Uint8Array(tpl.rawData).buffer;
+      console.log('📋 saveAsScheme: rawData 大小=' + (rawBuf.byteLength / 1024).toFixed(1) + 'KB');
     }
-  } catch(e) { console.warn('获取模板原始数据失败:', e.message); }
+  } catch(e) { console.warn('获取模板 rawData 失败:', e.message); }
 
   // 模板元数据（Sheet 列表、写入配置、提取配置）
   var templateMeta = {
@@ -2871,6 +2868,27 @@ async function saveAsScheme() {
     extractRow: tpl.extractRow || 1
   };
 
+  // V50-fix: 先上传模板文件到 Storage（与 DB insert 并行执行）
+  var tplIdForStorage = state.activeTemplateId[platform] || ('tpl_' + Date.now());
+  var storagePath = 'scheme-rawdata/' + platform + '/' + tplIdForStorage + '.xlsx';
+
+  // 上传模板文件到 Storage
+  var uploadOk = false;
+  if (rawBuf && sb) {
+    try {
+      await ensureBucketExists('ecom-assets');
+      var uploadResult = await sb.storage.from('ecom-assets').upload(storagePath, rawBuf, {
+        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        upsert: true
+      });
+      uploadOk = true;
+      console.log('📋 模板已上传到 Storage:', storagePath);
+    } catch(uploadErr) {
+      console.warn('⚠️ 模板上传 Storage 失败:', uploadErr.message);
+    }
+  }
+
+  // 构建 scheme（不含 template_rawdata，只含 Storage 路径引用）
   const scheme = {
     platform,
     scheme_name: name,
@@ -2878,19 +2896,25 @@ async function saveAsScheme() {
     template_library_id: state.activeTemplateId[platform] || '',
     template_headers: tpl.data?.[0] || [],
     template_data: tpl.data?.slice(0, 5) || [],
-    template_rawdata: templateRawData || null,
+    template_rawdata: null,
+    template_storage_path: uploadOk ? storagePath : null,
     template_meta: templateMeta,
     field_configs: fields || []
   };
 
-  console.log('📋 保存方案:', name, '| rawData 长度:', (templateRawData||'').length, '| sheets:', templateMeta.sheetNames.length);
+  console.log('📋 保存方案:', name, '| Storage路径:', storagePath, '| 上传状态:', uploadOk);
 
+  // DB insert（轻量 payload，不含大文件）
   try {
     const { data, error } = await sb.from('ecom_config_schemes').insert(scheme).select('id').single();
     if (error) throw error;
     scheme.id = data.id;
     scheme.created_at = new Date().toISOString();
     scheme.updated_at = new Date().toISOString();
+    // 保留内存中的 template_rawdata 用于当前会话
+    if (rawBuf) {
+      try { scheme.template_rawdata = arrayBufferToBase64(rawBuf); } catch(e) {}
+    }
     if (!state.configSchemes[platform]) state.configSchemes[platform] = [];
     state.configSchemes[platform].push(scheme);
     state.currentSchemeName[platform] = name;
@@ -2898,7 +2922,7 @@ async function saveAsScheme() {
     updateCurrentSchemeBadge();
     renderSchemeList();
     document.getElementById('newSchemeName').value = '';
-    // V48: 保存到 localStorage 时去掉冗余的 template_rawdata
+    // localStorage 不存 template_rawdata
     try {
       var localSchemes = JSON.parse(JSON.stringify(state.configSchemes));
       Object.keys(localSchemes).forEach(function(p) {
@@ -2906,70 +2930,31 @@ async function saveAsScheme() {
       });
       safeSetLS('ecom_schemes_fallback', JSON.stringify(localSchemes));
     } catch(lsErr) {}
-    showToast('方案「' + name + '」已保存（含模板文件）', 'success');
+    showToast('方案「' + name + '」已保存到云端' + (uploadOk ? '' : '（模板文件未上传，其他同事加载时需重新导入模板）'), uploadOk ? 'success' : 'warn');
   } catch(e) {
-    console.error('Save scheme error:', e);
-    // V50: 如果因数据过大失败，尝试将 template_rawdata 存到 Storage 后仅存引用
-    var originalError = e;
-    var savedToStorage = false;
-    if (templateRawData && templateRawData.length > 100000 && sb) {
-      try {
-        var tplIdForStorage = state.activeTemplateId[platform] || ('scheme_' + Date.now());
-        var rawBuf = base64ToArrayBuffer(templateRawData);
-        var uploadResult = await sb.storage.from('ecom-assets').upload('scheme-rawdata/' + platform + '/' + tplIdForStorage + '.xlsx', rawBuf, {
-          contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-          upsert: true
-        });
-        // 上传成功后，去掉 template_rawdata 重新保存方案
-        scheme.template_rawdata = null;
-        scheme.template_storage_path = 'scheme-rawdata/' + platform + '/' + tplIdForStorage + '.xlsx';
-        const { data: data2, error: err2 } = await sb.from('ecom_config_schemes').insert(scheme).select('id').single();
-        if (!err2 && data2) {
-          scheme.id = data2.id;
-          scheme.created_at = new Date().toISOString();
-          scheme.updated_at = new Date().toISOString();
-          if (!state.configSchemes[platform]) state.configSchemes[platform] = [];
-          state.configSchemes[platform].push(scheme);
-          state.currentSchemeName[platform] = name;
-          state.currentSchemeId[platform] = scheme.id;
-          updateCurrentSchemeBadge();
-          renderSchemeList();
-          document.getElementById('newSchemeName').value = '';
-          // localStorage 不存 template_rawdata
-          try {
-            var localSchemes = JSON.parse(JSON.stringify(state.configSchemes));
-            Object.keys(localSchemes).forEach(function(p) {
-              (localSchemes[p] || []).forEach(function(s) { delete s.template_rawdata; });
-            });
-            safeSetLS('ecom_schemes_fallback', JSON.stringify(localSchemes));
-          } catch(lsErr) {}
-          showToast('方案「' + name + '」已保存（模板文件已上传云端，多人可共享）', 'success');
-          savedToStorage = true;
-        }
-      } catch(storageErr) {
-        console.warn('V50 方案模板上传到 Storage 失败:', storageErr.message);
-      }
+    console.error('Save scheme DB insert error:', e);
+    // DB 完全失败 → 降级 localStorage
+    if (!state.configSchemes[platform]) state.configSchemes[platform] = [];
+    scheme.id = Date.now();
+    scheme.created_at = new Date().toISOString();
+    scheme.updated_at = new Date().toISOString();
+    if (rawBuf) {
+      try { scheme.template_rawdata = arrayBufferToBase64(rawBuf); } catch(e) {}
     }
-    if (!savedToStorage) {
-      // 最终降级 localStorage（不共享，仅本地）
-      console.warn('方案保存完全失败，降级 localStorage:', originalError.message);
-      if (!state.configSchemes[platform]) state.configSchemes[platform] = [];
-      scheme.id = Date.now();
-      scheme.created_at = new Date().toISOString();
-      scheme.updated_at = new Date().toISOString();
-      state.configSchemes[platform].push(scheme);
-      state.currentSchemeName[platform] = name;
-      state.currentSchemeId[platform] = scheme.id;
-      updateCurrentSchemeBadge();
-      renderSchemeList();
-      document.getElementById('newSchemeName').value = '';
+    state.configSchemes[platform].push(scheme);
+    state.currentSchemeName[platform] = name;
+    state.currentSchemeId[platform] = scheme.id;
+    updateCurrentSchemeBadge();
+    renderSchemeList();
+    document.getElementById('newSchemeName').value = '';
+    try {
       var localSchemes = JSON.parse(JSON.stringify(state.configSchemes));
       Object.keys(localSchemes).forEach(function(p) {
         (localSchemes[p] || []).forEach(function(s) { delete s.template_rawdata; });
       });
       safeSetLS('ecom_schemes_fallback', JSON.stringify(localSchemes));
-      showToast('方案已本地保存（含模板文件，云端暂不可用）', 'warn');
-    }
+    } catch(lsErr) {}
+    showToast('方案「' + name + '」仅本地保存（数据库写入失败，其他同事无法查看）', 'warn');
   }
 }
 
@@ -5484,9 +5469,52 @@ function resolveExportTemplate(platform) {
       console.groupEnd();
       return resolvedTpl;
     }
-    
+
+    // V50-fix: 如果 template_rawdata 为空但有 template_storage_path，从 Storage 下载
+    if (scheme && !scheme.template_rawdata && scheme.template_storage_path && sb) {
+      console.log('  📦 从 Storage 下载方案模板:', scheme.template_storage_path);
+      try {
+        var { data: dlData, error: dlErr } = await sb.storage.from('ecom-assets').download(scheme.template_storage_path);
+        if (!dlErr && dlData) {
+          var dlBuf = await dlData.arrayBuffer();
+          var dlArr = Array.from(new Uint8Array(dlBuf));
+          var dlB64 = arrayBufferToBase64(dlBuf);
+          var meta2 = {};
+          try {
+            meta2 = (scheme.template_meta && typeof scheme.template_meta === 'string')
+              ? JSON.parse(scheme.template_meta)
+              : (scheme.template_meta || {});
+          } catch(e) { meta2 = {}; }
+          var storageTpl = {
+            filename: scheme.template_filename || '',
+            data: scheme.template_data || [],
+            fields: scheme.field_configs || [],
+            sheetNames: meta2.sheetNames || [],
+            config: meta2.config || { sheetName: 'Sheet1', dataStartRow: 6 },
+            extractSheet: meta2.extractSheet || '',
+            extractRow: meta2.extractRow || 1,
+            rawData: dlArr
+          };
+          // 缓存到内存和 localStorage
+          scheme.template_rawdata = dlB64;
+          state.templates[platform] = storageTpl;
+          try {
+            localStorage.setItem('tpl_raw_' + platform, dlB64);
+            localStorage.setItem('tpl_sheets_' + platform, JSON.stringify(storageTpl.sheetNames));
+            localStorage.setItem('tpl_config_' + platform, JSON.stringify(storageTpl.config));
+            if (storageTpl.filename) localStorage.setItem('tpl_filename_' + platform, storageTpl.filename);
+          } catch(e) {}
+          console.log('  ✅ Storage 模板下载成功, 大小=' + dlArr.length);
+          console.groupEnd();
+          return storageTpl;
+        }
+      } catch(dlCatchErr) {
+        console.warn('  ❌ Storage 模板下载失败:', dlCatchErr.message);
+      }
+    }
+
     if (scheme) {
-      console.warn('  ⚠️ 方案存在但 template_rawdata 为空/null!');
+      console.warn('  ⚠️ 方案存在但无模板数据（template_rawdata 和 template_storage_path 均为空）');
     }
   }
 
@@ -5682,9 +5710,7 @@ async function loadDraft() {
       console.log('📋 从产品恢复 currentSchemeId:', state.currentSchemeId[plat], state.currentSchemeName[plat]);
     }
   }
-  // V43: 如果 state.templates[platform] 已有 rawData（从 loadFromSupabase 保留），
-  // 但 currentSchemeId 对应的方案有更准确的 rawData，优先用方案的
-  // 这解决了 core 问题：导出时 resolveExportTemplate 在不同调用时机可能拿到不同模板
+  // V50-fix: 恢复活动方案的模板 rawData — 优先 template_rawdata，其次 template_storage_path
   if (state.currentSchemeId[plat] && state.templates[plat]) {
     var schemes = state.configSchemes[plat] || [];
     var activeScheme = schemes.find(function(s) { return s.id == state.currentSchemeId[plat]; });
@@ -5695,6 +5721,21 @@ async function loadDraft() {
         if (activeScheme.template_filename) state.templates[plat].filename = activeScheme.template_filename;
         console.log('📋 loadDraft: 已用活动方案的 rawData 更新 state.templates[' + plat + '], 大小=' + rawBuf.byteLength + ', 文件=' + activeScheme.template_filename);
       } catch(e) { console.warn('loadDraft 方案 rawData 恢复失败:', e.message); }
+    } else if (activeScheme && activeScheme.template_storage_path && sb) {
+      // V50-fix: 从 Storage 下载模板文件
+      try {
+        var { data: dlData, error: dlErr } = await sb.storage.from('ecom-assets').download(activeScheme.template_storage_path);
+        if (!dlErr && dlData) {
+          var dlBuf = await dlData.arrayBuffer();
+          state.templates[plat].rawData = Array.from(new Uint8Array(dlBuf));
+          if (activeScheme.template_filename) state.templates[plat].filename = activeScheme.template_filename;
+          // 缓存 base64 到内存
+          try { activeScheme.template_rawdata = arrayBufferToBase64(dlBuf); } catch(e2) {}
+          console.log('📋 loadDraft: 从 Storage 下载模板成功, 大小=' + dlBuf.byteLength + ', 文件=' + activeScheme.template_filename);
+        }
+      } catch(dlErr2) {
+        console.warn('📋 loadDraft: Storage 下载模板失败:', dlErr2.message);
+      }
     }
   }
   // 标题方案本地恢复（V50: 仅在 Supabase 未加载到方案时使用 localStorage 补充）
