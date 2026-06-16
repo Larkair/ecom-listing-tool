@@ -270,7 +270,20 @@
     .product-item .pname { font-weight: 500; font-size: .85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .product-item .pmeta { font-size: .72rem; color: var(--muted); }
     .product-scheme-badge { display:inline-flex;align-items:center;gap:4px;font-size:.75rem;font-weight:500;
-      color:var(--pri);background:var(--pri-l);padding:3px 10px;border-radius:20px;white-space:nowrap; }
+      color:var(--pri);background:var(--pri-l);padding:3px 10px;border-radius:20px;white-space:nowrap;
+      cursor:pointer;transition:all .15s;position:relative; }
+    .product-scheme-badge:hover { background:#c7d2fe; }
+    .product-scheme-badge .scheme-arrow { font-size:.6rem;margin-left:2px;opacity:.6; }
+    .scheme-change-dropdown { position:absolute;top:100%;left:0;margin-top:4px;background:var(--card);
+      border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow-md);padding:6px;
+      min-width:200px;z-index:200;max-height:280px;overflow-y:auto; }
+    .scheme-change-dropdown .sch-opt { padding:8px 12px;border-radius:6px;cursor:pointer;font-size:.82rem;
+      display:flex;align-items:center;gap:8px;transition:background .1s; }
+    .scheme-change-dropdown .sch-opt:hover { background:var(--pri-l); }
+    .scheme-change-dropdown .sch-opt.active { background:var(--pri-l);color:var(--pri-d);font-weight:600; }
+    .scheme-change-dropdown .sch-opt.unlink { color:var(--muted);border-top:1px solid var(--border);margin-top:4px;padding-top:10px; }
+    .scheme-change-dropdown .sch-opt.unlink:hover { background:#fef2f2;color:var(--danger); }
+    .scheme-change-dropdown .sch-check { margin-left:auto;font-size:.75rem;color:var(--pri); }
     .thumb-placeholder { width: 44px; height: 44px; background: #f1f5f9; border-radius: 6px;
                          display: flex; align-items: center; justify-content: center; color: var(--muted); flex-shrink: 0; }
 
@@ -3167,6 +3180,112 @@ function updateCurrentSchemeBadge() {
   }
 }
 
+// V51: 产品方案关联徽章（可点击切换方案）
+function renderSchemeBadgeForProduct(idx) {
+  var product = state.products[state.platform][idx];
+  if (!product) return '';
+  var schemes = state.configSchemes[state.platform] || [];
+  if (schemes.length === 0 && !product.configSchemeName && !state.currentSchemeName[state.platform]) return '';
+
+  var displayName = product.configSchemeName || state.currentSchemeName[state.platform] || '';
+  var isLinked = !!product.configSchemeName;  // 是否明确关联
+  if (!displayName) return '';
+
+  var html = '<span class="product-scheme-badge" style="' + (isLinked ? '' : 'opacity:0.6') + '" onclick="event.stopPropagation();toggleSchemeDropdown(event,' + idx + ')">';
+  html += '📋 ' + escHtml(displayName);
+  if (schemes.length > 0) html += '<span class="scheme-arrow">▼</span>';
+  html += '</span>';
+  return html;
+}
+
+// V51: 切换方案下拉菜单
+var _schemeDropdownOpen = false;
+function toggleSchemeDropdown(event, idx) {
+  event.stopPropagation();
+  // 关闭已打开的
+  var existing = document.querySelector('.scheme-change-dropdown');
+  if (existing) { existing.remove(); _schemeDropdownOpen = false; return; }
+
+  var product = state.products[state.platform][idx];
+  var schemes = state.configSchemes[state.platform] || [];
+  if (schemes.length === 0) { showToast('暂无可用方案，请先在字段配置页创建方案', 'warn'); return; }
+
+  var badge = event.currentTarget;
+  var dropdown = document.createElement('div');
+  dropdown.className = 'scheme-change-dropdown';
+
+  schemes.forEach(function(s) {
+    var isActive = product.configSchemeId && (s.id == product.configSchemeId);
+    var opt = document.createElement('div');
+    opt.className = 'sch-opt' + (isActive ? ' active' : '');
+    opt.innerHTML = '<span>📋</span><span>' + escHtml(s.scheme_name) + '</span>' + (isActive ? '<span class="sch-check">✓</span>' : '');
+    opt.onclick = function(e) {
+      e.stopPropagation();
+      applyProductScheme(idx, s.id, s.scheme_name);
+      dropdown.remove();
+      _schemeDropdownOpen = false;
+    };
+    dropdown.appendChild(opt);
+  });
+
+  // 取消关联选项
+  if (product.configSchemeId) {
+    var unlink = document.createElement('div');
+    unlink.className = 'sch-opt unlink';
+    unlink.innerHTML = '<span>✂</span><span>取消关联方案</span>';
+    unlink.onclick = function(e) {
+      e.stopPropagation();
+      applyProductScheme(idx, null, '');
+      dropdown.remove();
+      _schemeDropdownOpen = false;
+    };
+    dropdown.appendChild(unlink);
+  }
+
+  badge.appendChild(dropdown);
+  _schemeDropdownOpen = true;
+}
+
+// 点击其他区域关闭下拉
+document.addEventListener('click', function() {
+  if (_schemeDropdownOpen) {
+    var dd = document.querySelector('.scheme-change-dropdown');
+    if (dd) dd.remove();
+    _schemeDropdownOpen = false;
+  }
+});
+
+// V51: 将产品组关联到指定方案
+function applyProductScheme(idx, schemeId, schemeName) {
+  var platform = state.platform;
+  var product = state.products[platform][idx];
+  if (!product) return;
+
+  var oldName = product.configSchemeName;
+  product.configSchemeId = schemeId;
+  product.configSchemeName = schemeName;
+
+  if (schemeId && schemeName) {
+    // 关联方案时，加载该方案的 field_configs
+    var schemes = state.configSchemes[platform] || [];
+    var scheme = schemes.find(function(s) { return s.id == schemeId; });
+    if (scheme && scheme.field_configs && scheme.field_configs.length > 0) {
+      // 仅更新当前产品编辑时的字段配置视图，不改变全局 fieldConfigs
+      // （全局 fieldConfigs 在保存方案/加载方案时管理）
+      console.log('📋 产品「' + product.name + '」已关联方案「' + schemeName + '」');
+    }
+    showToast('已关联方案「' + schemeName + '」', 'success');
+  } else {
+    console.log('📋 产品「' + product.name + '」已取消方案关联');
+    showToast('已取消方案关联', 'info');
+  }
+
+  // 刷新UI
+  renderProductForm(idx);
+  renderProductList();
+  debouncedSync();
+}
+
 // =============================================
 // AI标题方案管理
 // =============================================
@@ -3498,13 +3617,14 @@ function renderProductForm(idx) {
   const product = state.products[state.platform][idx];
   if (!product) return;
   const wrap = document.getElementById('productFormWrap');
+  var schemeBadgeHtml = renderSchemeBadgeForProduct(idx);
 
   wrap.innerHTML = `
     <div class="card">
       <div class="card-header">
         <input class="form-ctrl" style="font-size:1rem;font-weight:600;border:none;padding:0;width:260px;box-shadow:none"
                value="${escHtml(product.name)}" oninput="product_rename(${idx},this.value)" />
-        ${product.configSchemeName ? '<span class="product-scheme-badge">📋 ' + escHtml(product.configSchemeName) + '</span>' : (state.currentSchemeName[state.platform] ? '<span class="product-scheme-badge" style="opacity:0.6">📋 ' + escHtml(state.currentSchemeName[state.platform]) + '</span>' : '')}
+        ${schemeBadgeHtml}
         <div class="ml-auto flex gap8">
           <button class="btn btn-outline btn-sm" onclick="duplicateProduct(${idx})">复制</button>
           <button class="btn btn-primary btn-sm" onclick="saveCurrentProduct()">保存</button>
