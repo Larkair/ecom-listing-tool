@@ -503,6 +503,7 @@
   <div class="logo">
     <svg viewBox="0 0 32 32" fill="none"><rect width="32" height="32" rx="8" fill="#6366f1"/><path d="M8 22l5-7 4 5 3-4 5 6H8z" fill="white" opacity=".9"/><circle cx="22" cy="10" r="3" fill="#f97316"/></svg>
     跨境上架工具
+    <span id="versionBadge" style="font-size:.62rem;background:#f0fdf4;color:#16a34a;padding:1px 6px;border-radius:4px;margin-left:6px;font-weight:600;vertical-align:middle">V53</span>
   </div>
   <div class="topbar-sep"></div>
   <div class="platform-tabs">
@@ -4490,12 +4491,17 @@ function saveCurrentProduct() {
   }
   
   // V52: 先本地保存到 localStorage（轻量版不含大图片，确保不超配额）
-  safeSetLS('ecom_fallback_light', buildLightFallback());
+  var lightResult = safeSetLS('ecom_fallback_light', buildLightFallback());
   // 同时保存完整版（含图片 dataUrl） — 如果配额不够会自动降级到轻量版
-  safeSetLS('ecom_fallback', JSON.stringify({
+  var fullResult = safeSetLS('ecom_fallback', JSON.stringify({
     fieldConfigs: state.fieldConfigs, products: state.products, settings: state.settings,
     previewSynced: state.previewSynced
   }), buildLightFallback());
+  // V53+: 诊断 — 确认 localStorage 是否真的写入成功
+  console.log('📦 V53: saveCurrentProduct localStorage 写入 — light=' + lightResult + ' full=' + fullResult +
+    ' | 验证 light=' + (localStorage.getItem('ecom_fallback_light')||'').length + ' bytes' +
+    ' full=' + (localStorage.getItem('ecom_fallback')||'').length + ' bytes' +
+    ' | 产品数=' + (state.products[platform]||[]).length);
   // V33: 保存后自动同步到导出预览
   refreshPreview();
   showToast('产品组信息已保存，已同步到导出预览', 'success');
@@ -6009,17 +6015,29 @@ async function saveDraft() {
 }
 
 async function loadDraft() {
+  console.log('📦 V53: === loadDraft 开始 ===');
+
   const success = await loadFromSupabase();
-  // V52: 无论 Supabase 是否成功，都尝试从 localStorage 合并补充
+  console.log('📦 V53: loadFromSupabase 返回:', success,
+    '| 各平台产品数:', JSON.stringify({
+      shopee: (state.products.shopee||[]).length,
+      lazada: (state.products.lazada||[]).length,
+      tiktok: (state.products.tiktok||[]).length
+    }));
+
+  // V53+: 无论 Supabase 是否成功，都尝试从 localStorage 合并补充
   // 原因：Supabase 可能加载成功但产品列表为空（比如 sync 中断后只剩 delete 没有 insert）
   var localRestored = false;
   try {
     // 先尝试完整版 fallback
     var saved = localStorage.getItem('ecom_fallback');
+    var fallbackKey = 'ecom_fallback';
     if (!saved) {
       // 完整版不存在（配额溢出时降级存了轻量版）
       saved = localStorage.getItem('ecom_fallback_light');
+      fallbackKey = 'ecom_fallback_light';
     }
+    console.log('📦 V53: localStorage 读取 — key=' + fallbackKey + ', 数据长度=' + (saved ? saved.length : 0));
     if (saved) {
       var data = JSON.parse(saved);
       if (!success) {
@@ -6056,8 +6074,37 @@ async function loadDraft() {
       }
     }
   } catch(e) { console.warn('localStorage 合并失败:', e.message); }
+
+  // V53+: 终极安全网 — 如果 localStorage 有产品数据但 state 中仍然没有（前面条件判断遗漏），无条件恢复
+  try {
+    if (saved && !localRestored) {
+      var forceData = JSON.parse(saved);
+      var hasAnyLocalProduct = ['shopee','lazada','tiktok'].some(function(plat) {
+        return (forceData.products && forceData.products[plat] && forceData.products[plat].length > 0);
+      });
+      var hasAnyStateProduct = ['shopee','lazada','tiktok'].some(function(plat) {
+        return (state.products[plat] && state.products[plat].length > 0);
+      });
+      if (hasAnyLocalProduct && !hasAnyStateProduct) {
+        // localStorage 有产品但 state 完全为空 → 强制恢复
+        if (forceData.products) state.products = forceData.products;
+        if (forceData.fieldConfigs) state.fieldConfigs = forceData.fieldConfigs;
+        if (forceData.settings) state.settings = forceData.settings;
+        if (forceData.previewSynced) state.previewSynced = forceData.previewSynced;
+        localRestored = true;
+        console.log('📦 V53: 终极安全网触发 — localStorage 有 ' + Object.keys(state.products).map(function(k){return state.products[k].length}).join('/') + ' 个产品，已强制恢复到 state');
+      }
+    }
+  } catch(e2) { console.warn('V53 终极安全网异常:', e2.message); }
+
+  // V53+: 输出最终状态诊断
+  var finalCounts = { shopee: (state.products.shopee||[]).length, lazada: (state.products.lazada||[]).length, tiktok: (state.products.tiktok||[])?.length || 0 };
+  console.log('📦 V53: === loadDraft 完成 === success=' + success + ' localRestored=' + localRestored + ' 最终产品数=' + JSON.stringify(finalCounts));
+
   if (localRestored && !success) {
     showToast('已从本地缓存恢复（云端暂不可用）', 'warn');
+  } else if (localRestored && success) {
+    showToast('已从本地缓存补充数据', 'info');
   }
   // V41: 始终合并 ecom_schemes_fallback（即使 Supabase 加载成功）
   // 因为方案可能因模板文件过大导致 Supabase 插入失败，降级到 localStorage
@@ -6159,6 +6206,15 @@ async function loadDraft() {
   renderProductList();
   updateProductBadge();
   updateCurrentSchemeBadge();
+
+  // V53+: 在 UI 上显示数据来源和产品数量
+  var totalProds = ['shopee','lazada','tiktok'].reduce(function(s, p) { return s + (state.products[p]||[]).length; }, 0);
+  var statusEl = document.getElementById('syncStatus');
+  if (statusEl) {
+    var sourceTag = success ? (localRestored ? '☁️+💾' : '☁️') : '💾';
+    statusEl.innerHTML = sourceTag + ' 已同步 · ' + totalProds + ' 个产品' + (!success ? ' <span style="color:#f97316">(离线)</span>' : '');
+  }
+
   if (state.products[state.platform]?.length > 0) {
     state.currentProductIdx = 0;
     renderProductForm(0);
