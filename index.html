@@ -8500,42 +8500,36 @@ document.addEventListener('DOMContentLoaded', async () => {
     showToast(sb ? '正在从云端加载数据…' : '云端未连接，使用离线模式', 'info');
   } catch(e) { initWarnings.push('Toast显示: ' + e.message); }
 
-  // 步骤3: 加载草稿数据（Supabase + localStorage）
+  // 步骤3: 加载草稿数据（Supabase + localStorage）— 非关键，首次使用或新浏览器时无数据是正常情况
   try {
     await loadDraft();
   } catch(e) {
-    console.error('❌ [步骤3] loadDraft 失败:', e);
-    initErrors.push('草稿加载: ' + e.message);
+    console.warn('⚠️ [步骤3] loadDraft 未加载数据（首次使用/新浏览器/网络不通均属正常）:', e.message);
   }
 
-  // 步骤4: 恢复模板库（localStorage）
+  // 步骤4: 恢复模板库（localStorage）— 非关键，新浏览器无模板数据是正常情况
   try {
     restoreTemplateFromLocalStorage();
   } catch(e) {
-    console.error('❌ [步骤4] restoreTemplateFromLocalStorage 失败:', e);
-    initErrors.push('模板恢复: ' + e.message);
+    console.warn('⚠️ [步骤4] restoreTemplateFromLocalStorage 未恢复模板（新浏览器/未上传过模板均属正常）:', e.message);
   }
 
-  // 步骤5: 从云端恢复缺失的模板 rawData（异步）— 非关键，失败仅意味着需重新上传模板
+  // 步骤5: 从云端恢复缺失的模板 rawData（异步）— 非关键
   try {
     await restoreMissingTemplateRawData();
   } catch(e) {
-    console.warn('⚠️ [步骤5] 云端模板恢复失败（非关键，可手动上传模板）:', e.message);
-    initWarnings.push('云端模板恢复: ' + e.message);
+    console.warn('⚠️ [步骤5] 云端模板恢复失败:', e.message);
   }
 
   // 步骤6: 从已恢复的模板库重建方案的 template_rawdata — 非关键
   try {
     reconstructSchemeRawDataFromLibrary();
   } catch(e) {
-    console.warn('⚠️ [步骤6] 方案重建失败（非关键）:', e.message);
-    initWarnings.push('方案重建: ' + e.message);
+    console.warn('⚠️ [步骤6] 方案重建失败:', e.message);
   }
 
   // 步骤7: 加载标题部件定义
-  try {
-    loadTitlePartDefs();
-  } catch(e) { initWarnings.push('标题定义: ' + e.message); }
+  try { loadTitlePartDefs(); } catch(e) { console.warn('⚠️ [步骤7] 标题定义加载失败:', e.message); }
 
   // 步骤8: 清除加载提示
   try { document.querySelectorAll('.toast').forEach(t => t.remove()); } catch(e) {}
