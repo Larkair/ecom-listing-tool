@@ -1177,7 +1177,7 @@ const MAX_IMG_PER_GROUP = 9;
 // =============================================
 // Supabase 初始化（容错：CDN 加载失败不影响核心功能）
 // =============================================
-console.log('🛠 批量上架工具 V52 | 2026-06-17 | DB修复template_library_id列 | 方案云端存储PGRST204自动重试 | 跨浏览器共享修复');
+console.log('🛠 批量上架工具 V52 | 2026-06-17 | DB修复template_library_id列 | 产品upsert原子同步 | localStorage轻量备份+合并恢复 | 跨浏览器共享修复');
 // =============================================
 const SUPABASE_URL = 'https://khrppyhcjzkkokyhnhhd.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtocnBweWhjanpra29reWhuaGhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwNzY1NDEsImV4cCI6MjA5NjY1MjU0MX0.uS9YablBNwjUmQlwRbLRw3SEPNgEnO1Uc6Poe1SeB88';
@@ -1292,9 +1292,7 @@ async function loadFromSupabase() {
 async function syncToSupabase() {
   if (!sb) {
     setSyncStatus('offline');
-    safeSetLS('ecom_fallback', JSON.stringify({
-      fieldConfigs: state.fieldConfigs, products: state.products, settings: state.settings
-    }));
+    safeSetLS('ecom_fallback_light', buildLightFallback());
     return;
   }
   setSyncStatus('syncing');
@@ -1313,9 +1311,16 @@ async function syncToSupabase() {
       updated_at: new Date().toISOString()
     }, { onConflict: 'platform' });
 
-    // 保存产品（先删后插，图片压缩后同步以减少网络传输）
-    await sb.from('ecom_products').delete().eq('platform', platform);
+    // V52: 产品同步改为原子操作 — 先 upsert 新数据，再删除不在列表中的旧数据
+    // 之前是"先删后插"，刷新中断会导致数据丢失
     const products = state.products[platform] || [];
+    // 获取当前 DB 中该平台的所有产品 ID
+    var existingDbIds = [];
+    try {
+      var { data: existingRows } = await sb.from('ecom_products').select('id').eq('platform', platform);
+      if (existingRows) existingDbIds = existingRows.map(function(r) { return r.id; });
+    } catch(e) { console.warn('查询现有产品ID失败:', e.message); }
+
     if (products.length > 0) {
       // 并行压缩所有产品图片（缩到 400px，JPEG 0.4 质量）
       const rows = await Promise.all(products.map(async (p, i) => {
@@ -1325,7 +1330,7 @@ async function syncToSupabase() {
         })));
         const fdi = await compressImageList(p.fixedDetailImages || [], 400, 400, 0.4);
         const sc = p.sizeChart ? await compressImage(p.sizeChart, 400, 800, 0.4) : null;
-        return {
+        var row = {
           platform,
           name: p.name,
           product_data: { images, fixedDetailImages: fdi, sizeChart: sc,
@@ -1335,11 +1340,40 @@ async function syncToSupabase() {
             configSchemeId: p.configSchemeId || null, configSchemeName: p.configSchemeName || '' },
           sort_order: i, updated_at: new Date().toISOString()
         };
+        // V52: 如果产品有 supabase_id（已存在于 DB），用 upsert 更新而非新增
+        if (p.supabase_id) row.id = p.supabase_id;
+        return row;
       }));
-      // 分批插入，每批最多 50 条，避免单次请求过大
-      const BATCH = 50;
-      for (let i = 0; i < rows.length; i += BATCH) {
-        await sb.from('ecom_products').insert(rows.slice(i, i + BATCH));
+      // V52: 使用 upsert（有 id → 更新，无 id → 新增）
+      // onConflict 默认使用主键 id
+      var { data: upsertData, error: upsertErr } = await sb.from('ecom_products').upsert(rows, { onConflict: 'id' });
+      if (upsertErr) {
+        console.error('产品 upsert 失败:', upsertErr.message);
+        // 回退到旧方式：先删后插
+        await sb.from('ecom_products').delete().eq('platform', platform);
+        var BATCH = 50;
+        for (var i = 0; i < rows.length; i += BATCH) {
+          await sb.from('ecom_products').insert(rows.slice(i, i + BATCH));
+        }
+      } else if (upsertData) {
+        // V52: 更新 state 中的 supabase_id，确保后续同步能正确 upsert
+        upsertData.forEach(function(dbRow, idx) {
+          if (products[idx]) products[idx].supabase_id = dbRow.id;
+        });
+      }
+      // V52: 删除 DB 中不在当前产品列表的旧产品
+      var newDbIds = (upsertData || rows).map(function(r) { return r.id; });
+      var staleIds = existingDbIds.filter(function(dbId) { return !newDbIds.includes(dbId); });
+      if (staleIds.length > 0) {
+        try {
+          await sb.from('ecom_products').delete().in('id', staleIds);
+          console.log('📦 已清理 ' + staleIds.length + ' 个旧产品记录');
+        } catch(e) { console.warn('清理旧产品失败:', e.message); }
+      }
+    } else {
+      // 没有产品 → 删除该平台所有旧产品
+      if (existingDbIds.length > 0) {
+        try { await sb.from('ecom_products').delete().eq('platform', platform); } catch(e) {}
       }
     }
 
@@ -1348,19 +1382,51 @@ async function syncToSupabase() {
       id: 1, settings_data: state.settings, updated_at: new Date().toISOString()
     }, { onConflict: 'id' });
 
+    // V52: 同步成功后也保存一份轻量备份到 localStorage
+    safeSetLS('ecom_fallback_light', buildLightFallback());
     setSyncStatus('idle');
   } catch (e) {
     console.error('Supabase sync error:', e);
     setSyncStatus('error');
-    safeSetLS('ecom_fallback', JSON.stringify({
-      fieldConfigs: state.fieldConfigs, products: state.products, settings: state.settings
-    }));
+    safeSetLS('ecom_fallback_light', buildLightFallback());
   }
 }
 
 function debouncedSync() {
   if (syncTimer) clearTimeout(syncTimer);
   syncTimer = setTimeout(() => syncToSupabase(), 2000);
+}
+
+// V52: 构建轻量 localStorage 备份（不含大体积 dataUrl 图片）
+// 产品图片仅保留 url（Storage 公开链接），不保留 base64 dataUrl
+function buildLightFallback() {
+  var lightProducts = {};
+  ['shopee','lazada','tiktok'].forEach(function(plat) {
+    lightProducts[plat] = (state.products[plat] || []).map(function(p) {
+      var lp = {
+        id: p.id, name: p.name, supabase_id: p.supabase_id || null,
+        configSchemeId: p.configSchemeId || null, configSchemeName: p.configSchemeName || '',
+        startCode: p.startCode || '', fieldValues: p.fieldValues || {},
+        aiTitleParts: p.aiTitleParts || ['','','','','','','','','',''],
+        generatedTitles: p.generatedTitles || [], selectedTitle: p.selectedTitle || '',
+        images: (p.images || []).map(function(g) {
+          return { linkName: g.linkName || '', files: (g.files || []).map(function(f) {
+            // 优先保留 Storage URL，其次 dataUrl（但轻量版只保留 url）
+            return { name: f.name || '', url: f.url || '', dataUrl: '' };
+          })};
+        }),
+        fixedDetailImages: (p.fixedDetailImages || []).map(function(f) {
+          return { name: f.name || '', url: f.url || '', dataUrl: '' };
+        }),
+        sizeChart: p.sizeChart ? { url: p.sizeChart.url || '', dataUrl: '' } : null
+      };
+      return lp;
+    });
+  });
+  return JSON.stringify({
+    fieldConfigs: state.fieldConfigs, products: lightProducts, settings: state.settings,
+    previewSynced: state.previewSynced
+  });
 }
 
 // 图片压缩工具：生成低分辨率缩略图（用于预览/导出加速）
@@ -4338,11 +4404,13 @@ function saveCurrentProduct() {
     synced.push(productId);
   }
   
-  // 先本地保存到 localStorage（瞬时），然后后台同步到云端
+  // V52: 先本地保存到 localStorage（轻量版不含大图片，确保不超配额）
+  safeSetLS('ecom_fallback_light', buildLightFallback());
+  // 同时保存完整版（含图片 dataUrl） — 如果配额不够会自动降级到轻量版
   safeSetLS('ecom_fallback', JSON.stringify({
     fieldConfigs: state.fieldConfigs, products: state.products, settings: state.settings,
     previewSynced: state.previewSynced
-  }));
+  }), buildLightFallback());
   // V33: 保存后自动同步到导出预览
   refreshPreview();
   showToast('产品组信息已保存，已同步到导出预览', 'success');
@@ -5857,19 +5925,49 @@ async function saveDraft() {
 
 async function loadDraft() {
   const success = await loadFromSupabase();
-  if (!success) {
-    // 降级：尝试从 localStorage 恢复
-    try {
-      const saved = localStorage.getItem('ecom_fallback');
-      if (saved) {
-        const data = JSON.parse(saved);
+  // V52: 无论 Supabase 是否成功，都尝试从 localStorage 合并补充
+  // 原因：Supabase 可能加载成功但产品列表为空（比如 sync 中断后只剩 delete 没有 insert）
+  var localRestored = false;
+  try {
+    // 先尝试完整版 fallback
+    var saved = localStorage.getItem('ecom_fallback');
+    if (!saved) {
+      // 完整版不存在（配额溢出时降级存了轻量版）
+      saved = localStorage.getItem('ecom_fallback_light');
+    }
+    if (saved) {
+      var data = JSON.parse(saved);
+      if (!success) {
+        // Supabase 完全失败 → 用 localStorage 数据覆盖
         if (data.fieldConfigs) state.fieldConfigs = data.fieldConfigs;
         if (data.products) state.products = data.products;
         if (data.settings) state.settings = data.settings;
-        if (data.previewSynced) state.previewSynced = data.previewSynced; // V47
-        showToast('已从本地缓存恢复（云端暂不可用）', 'warn');
+        if (data.previewSynced) state.previewSynced = data.previewSynced;
+        localRestored = true;
+      } else {
+        // Supabase 成功但产品可能为空 → 合并补充
+        ['shopee','lazada','tiktok'].forEach(function(plat) {
+          var localProds = (data.products && data.products[plat]) || [];
+          var cloudProds = state.products[plat] || [];
+          if (cloudProds.length === 0 && localProds.length > 0) {
+            // 云端该平台无产品，本地有 → 使用本地数据
+            state.products[plat] = localProds;
+            localRestored = true;
+            console.log('📦 V52: ' + plat + ' 平台从 localStorage 补充 ' + localProds.length + ' 个产品（云端为空）');
+          }
+        });
+        // 字段配置和设置也合并补充
+        ['shopee','lazada','tiktok'].forEach(function(plat) {
+          if ((state.fieldConfigs[plat] || []).length === 0 && (data.fieldConfigs && data.fieldConfigs[plat] || []).length > 0) {
+            state.fieldConfigs[plat] = data.fieldConfigs[plat];
+            localRestored = true;
+          }
+        });
       }
-    } catch(_) {}
+    }
+  } catch(e) { console.warn('localStorage 合并失败:', e.message); }
+  if (localRestored && !success) {
+    showToast('已从本地缓存恢复（云端暂不可用）', 'warn');
   }
   // V41: 始终合并 ecom_schemes_fallback（即使 Supabase 加载成功）
   // 因为方案可能因模板文件过大导致 Supabase 插入失败，降级到 localStorage
