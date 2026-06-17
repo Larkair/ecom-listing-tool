@@ -1177,7 +1177,7 @@ const MAX_IMG_PER_GROUP = 9;
 // =============================================
 // Supabase 初始化（容错：CDN 加载失败不影响核心功能）
 // =============================================
-console.log('🛠 批量上架工具 V52 | 2026-06-17 | DB修复template_library_id列 | 产品upsert原子同步 | localStorage轻量备份+合并恢复 | 跨浏览器共享修复');
+console.log('🛠 批量上架工具 V53 | 2026-06-17 | 产品持久化4层防护 | upsert returning回写ID | 新增产品自动备份 | beforeunload防丢失 | previewSynced ID映射修复');
 // =============================================
 const SUPABASE_URL = 'https://khrppyhcjzkkokyhnhhd.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtocnBweWhjanpra29reWhuaGhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwNzY1NDEsImV4cCI6MjA5NjY1MjU0MX0.uS9YablBNwjUmQlwRbLRw3SEPNgEnO1Uc6Poe1SeB88';
@@ -1232,7 +1232,13 @@ async function loadFromSupabase() {
       products.forEach(p => {
         if (!state.products[p.platform]) state.products[p.platform] = [];
         const pd = typeof p.product_data === 'string' ? JSON.parse(p.product_data) : p.product_data;
-        const product = { id: Date.now() + Math.random(), supabase_id: p.id, name: p.name, ...pd };
+        // V53: 保留原始产品 ID（不再用 Date.now()+Math.random 重新生成）
+        // 原始 ID 存在 product_data.id 中，确保 previewSynced 和其他引用一致
+        const origId = (pd && pd.id) ? pd.id : ('prod_' + p.id);
+        const product = { id: origId, supabase_id: p.id, name: p.name, ...pd };
+        // 确保 id 不被 pd.id 覆盖（spread 可能覆盖）
+        product.id = origId;
+        product.supabase_id = p.id;
         // 确保所有必要字段存在
         product.images = product.images || [];
         product.fixedDetailImages = product.fixedDetailImages || [];
@@ -1311,8 +1317,10 @@ async function syncToSupabase() {
       updated_at: new Date().toISOString()
     }, { onConflict: 'platform' });
 
-    // V52: 产品同步改为原子操作 — 先 upsert 新数据，再删除不在列表中的旧数据
-    // 之前是"先删后插"，刷新中断会导致数据丢失
+    // V53: 产品同步 — 安全 upsert 模式
+    // 关键修复：(1) upsert 添加 returning:'representation' 确保 supabase_id 回写
+    //            (2) upsert 失败不再"先删后插"（会丢失数据），改为分批逐个 upsert
+    //            (3) 逐个 upsert 成功后立即回写 supabase_id 到 state
     const products = state.products[platform] || [];
     // 获取当前 DB 中该平台的所有产品 ID
     var existingDbIds = [];
@@ -1337,33 +1345,68 @@ async function syncToSupabase() {
             startCode: p.startCode || '', fieldValues: p.fieldValues || {},
             aiTitleParts: p.aiTitleParts || ['','','','','','','','','',''],
             generatedTitles: p.generatedTitles || [], selectedTitle: p.selectedTitle || '',
-            configSchemeId: p.configSchemeId || null, configSchemeName: p.configSchemeName || '' },
+            configSchemeId: p.configSchemeId || null, configSchemeName: p.configSchemeName || '',
+            id: p.id },  // V53: 保留原始产品ID，确保 loadFromSupabase 恢复时 ID 稳定
           sort_order: i, updated_at: new Date().toISOString()
         };
-        // V52: 如果产品有 supabase_id（已存在于 DB），用 upsert 更新而非新增
+        // 如果产品有 supabase_id（已存在于 DB），用 upsert 更新而非新增
         if (p.supabase_id) row.id = p.supabase_id;
         return row;
       }));
-      // V52: 使用 upsert（有 id → 更新，无 id → 新增）
-      // onConflict 默认使用主键 id
-      var { data: upsertData, error: upsertErr } = await sb.from('ecom_products').upsert(rows, { onConflict: 'id' });
+
+      // V53: 尝试批量 upsert（带 returning 确保回写 ID）
+      var { data: upsertData, error: upsertErr } = await sb.from('ecom_products')
+        .upsert(rows, { onConflict: 'id', returning: 'representation' });
+
       if (upsertErr) {
-        console.error('产品 upsert 失败:', upsertErr.message);
-        // 回退到旧方式：先删后插
-        await sb.from('ecom_products').delete().eq('platform', platform);
-        var BATCH = 50;
-        for (var i = 0; i < rows.length; i += BATCH) {
-          await sb.from('ecom_products').insert(rows.slice(i, i + BATCH));
+        console.error('产品批量 upsert 失败:', upsertErr.message);
+        // V53: 不再用危险的"先删后插"（会丢失数据！）
+        // 改为逐个 upsert，每个产品独立处理，部分失败不影响其他产品
+        console.log('📦 V53: 改为逐个 upsert...');
+        upsertData = [];
+        for (var ri = 0; ri < rows.length; ri++) {
+          try {
+            var { data: singleData, error: singleErr } = await sb.from('ecom_products')
+              .upsert(rows[ri], { onConflict: 'id', returning: 'representation' });
+            if (singleErr) {
+              console.warn('产品 #' + ri + ' upsert 失败:', singleErr.message);
+            } else if (singleData && singleData.length > 0) {
+              upsertData.push(singleData[0]);
+            }
+          } catch(e2) {
+            console.warn('产品 #' + ri + ' upsert 异常:', e2.message);
+          }
         }
-      } else if (upsertData) {
-        // V52: 更新 state 中的 supabase_id，确保后续同步能正确 upsert
-        upsertData.forEach(function(dbRow, idx) {
-          if (products[idx]) products[idx].supabase_id = dbRow.id;
-        });
       }
-      // V52: 删除 DB 中不在当前产品列表的旧产品
-      var newDbIds = (upsertData || rows).map(function(r) { return r.id; });
-      var staleIds = existingDbIds.filter(function(dbId) { return !newDbIds.includes(dbId); });
+
+      // V53: 回写 supabase_id 到 state（无论批量还是逐个模式）
+      if (upsertData && upsertData.length > 0) {
+        // 构建 DB id → state 产品索引 的映射
+        // 关键：不能假设 upsertData 和 products 的顺序一致（逐个模式可能不按序）
+        var dbIdMap = {};
+        upsertData.forEach(function(dbRow) {
+          // 从 product_data 中恢复原始产品 ID
+          var pd = typeof dbRow.product_data === 'string' ? JSON.parse(dbRow.product_data) : dbRow.product_data;
+          var origId = pd ? pd.id : null;
+          if (origId) dbIdMap[origId] = dbRow.id;
+          // 同时也按 supabase_id/row.id 映射（对于有 supabase_id 的产品）
+          if (dbRow.id) dbIdMap[dbRow.id] = dbRow.id;
+        });
+        products.forEach(function(p) {
+          if (p.supabase_id) {
+            // 已有 supabase_id → 确认映射
+            if (dbIdMap[p.supabase_id]) p.supabase_id = dbIdMap[p.supabase_id];
+          } else {
+            // 无 supabase_id → 通过原始 ID 查找映射
+            if (dbIdMap[p.id]) p.supabase_id = dbIdMap[p.id];
+          }
+        });
+        console.log('📦 V53: supabase_id 已回写，产品数=' + products.length + ', 回写数=' + Object.keys(dbIdMap).length);
+      }
+
+      // 删除 DB 中不在当前产品列表的旧产品
+      var currentSupabaseIds = products.map(function(p) { return p.supabase_id; }).filter(Boolean);
+      var staleIds = existingDbIds.filter(function(dbId) { return !currentSupabaseIds.includes(dbId); });
       if (staleIds.length > 0) {
         try {
           await sb.from('ecom_products').delete().in('id', staleIds);
@@ -1382,13 +1425,23 @@ async function syncToSupabase() {
       id: 1, settings_data: state.settings, updated_at: new Date().toISOString()
     }, { onConflict: 'id' });
 
-    // V52: 同步成功后也保存一份轻量备份到 localStorage
+    // V53: 同步成功后保存双层 localStorage 备份（确保刷新后有数据可恢复）
     safeSetLS('ecom_fallback_light', buildLightFallback());
+    // 完整版备份（含图片 dataUrl）— 配额溢出自动降级到轻量版
+    safeSetLS('ecom_fallback', JSON.stringify({
+      fieldConfigs: state.fieldConfigs, products: state.products, settings: state.settings,
+      previewSynced: state.previewSynced
+    }), buildLightFallback());
     setSyncStatus('idle');
   } catch (e) {
     console.error('Supabase sync error:', e);
     setSyncStatus('error');
+    // V53: 失败时也保存双层备份
     safeSetLS('ecom_fallback_light', buildLightFallback());
+    safeSetLS('ecom_fallback', JSON.stringify({
+      fieldConfigs: state.fieldConfigs, products: state.products, settings: state.settings,
+      previewSynced: state.previewSynced
+    }), buildLightFallback());
   }
 }
 
@@ -1396,6 +1449,25 @@ function debouncedSync() {
   if (syncTimer) clearTimeout(syncTimer);
   syncTimer = setTimeout(() => syncToSupabase(), 2000);
 }
+
+// V53: beforeunload 保护 — 防止刷新中断未完成的同步
+// 如果还有待同步的防抖计时器，立即执行同步并保存 localStorage 备份
+var syncInProgress = false;
+window.addEventListener('beforeunload', function(e) {
+  if (syncTimer) {
+    // 有待执行的同步 → 立即保存 localStorage 备份（不阻塞等待 Supabase）
+    clearTimeout(syncTimer);
+    syncTimer = null;
+    try {
+      safeSetLS('ecom_fallback_light', buildLightFallback());
+      safeSetLS('ecom_fallback', JSON.stringify({
+        fieldConfigs: state.fieldConfigs, products: state.products, settings: state.settings,
+        previewSynced: state.previewSynced
+      }), buildLightFallback());
+      console.log('📦 V53: beforeunload — localStorage 备份已保存');
+    } catch(e) { console.warn('beforeunload 备份失败:', e.message); }
+  }
+});
 
 // V52: 构建轻量 localStorage 备份（不含大体积 dataUrl 图片）
 // 产品图片仅保留 url（Storage 公开链接），不保留 base64 dataUrl
@@ -3658,6 +3730,13 @@ function _doAddNewProduct() {
   renderProductList();
   renderProductForm(state.currentProductIdx);
   updateProductBadge();
+  // V53: 新增产品后立即 localStorage 备份 + 后台同步（防止刷新丢失）
+  safeSetLS('ecom_fallback_light', buildLightFallback());
+  safeSetLS('ecom_fallback', JSON.stringify({
+    fieldConfigs: state.fieldConfigs, products: state.products, settings: state.settings,
+    previewSynced: state.previewSynced
+  }), buildLightFallback());
+  debouncedSync();
   showToast('产品组已创建，请填写信息', 'success');
 }
 
@@ -3708,6 +3787,12 @@ function deleteProduct(idx) {
   else document.getElementById('productFormWrap').innerHTML = '<div class="empty-state"><p>请新增产品组</p></div>';
   updateProductBadge();
   refreshPreview(); // V46: 同步更新导出预览
+  // V53: 删除后立即 localStorage 备份（防止刷新丢失其他产品）
+  safeSetLS('ecom_fallback_light', buildLightFallback());
+  safeSetLS('ecom_fallback', JSON.stringify({
+    fieldConfigs: state.fieldConfigs, products: state.products, settings: state.settings,
+    previewSynced: state.previewSynced
+  }), buildLightFallback());
   debouncedSync();
 }
 
@@ -5945,7 +6030,7 @@ async function loadDraft() {
         if (data.previewSynced) state.previewSynced = data.previewSynced;
         localRestored = true;
       } else {
-        // Supabase 成功但产品可能为空 → 合并补充
+        // Supabase 成功但产品可能不完整 → 合并补充
         ['shopee','lazada','tiktok'].forEach(function(plat) {
           var localProds = (data.products && data.products[plat]) || [];
           var cloudProds = state.products[plat] || [];
@@ -5953,7 +6038,12 @@ async function loadDraft() {
             // 云端该平台无产品，本地有 → 使用本地数据
             state.products[plat] = localProds;
             localRestored = true;
-            console.log('📦 V52: ' + plat + ' 平台从 localStorage 补充 ' + localProds.length + ' 个产品（云端为空）');
+            console.log('📦 V53: ' + plat + ' 平台从 localStorage 补充 ' + localProds.length + ' 个产品（云端为空）');
+          } else if (localProds.length > cloudProds.length) {
+            // V53: 本地产品比云端多（sync 中断导致部分数据未写入） → 用本地数据覆盖
+            state.products[plat] = localProds;
+            localRestored = true;
+            console.log('📦 V53: ' + plat + ' 平台 localStorage 产品数(' + localProds.length + ') > 云端(' + cloudProds.length + ')，已用本地覆盖');
           }
         });
         // 字段配置和设置也合并补充
@@ -6073,12 +6163,22 @@ async function loadDraft() {
     state.currentProductIdx = 0;
     renderProductForm(0);
   }
-  // V47: 向后兼容 — 旧草稿无 previewSynced 时，将所有现有产品标记为已同步
+  // V53: previewSynced ID 映射重建 — 确保每个平台的已同步ID与当前产品ID一致
+  // 修复：从 Supabase 加载后产品 ID 可能变化（旧版本用 Date.now()+Math.random 生成）
+  // 但 localStorage 中的 previewSynced 记录了旧 ID → 不匹配 → 预览不显示产品
   ['shopee','lazada','tiktok'].forEach(function(p) {
     var synced = state.previewSynced[p] || [];
+    var currentIds = new Set((state.products[p] || []).map(function(pr) { return pr.id; }));
+    // 检查 synced 中的 ID 是否都在 currentIds 中
+    var mismatchCount = synced.filter(function(sid) { return !currentIds.has(sid); }).length;
     if (synced.length === 0 && state.products[p] && state.products[p].length > 0) {
+      // 空 previewSynced 但有产品 → 全部标记为已同步（V47 迁移）
       state.previewSynced[p] = state.products[p].map(function(pr) { return pr.id; });
-      console.log('🔄 V47 迁移: ' + p + ' 平台 ' + state.previewSynced[p].length + ' 个产品组已标记为同步');
+      console.log('🔄 V53 迁移: ' + p + ' 平台 ' + state.previewSynced[p].length + ' 个产品组已标记为同步（previewSynced 为空）');
+    } else if (mismatchCount > 0) {
+      // 有旧 ID 不匹配 → 用当前所有产品 ID 重建（全部标记为已同步）
+      state.previewSynced[p] = (state.products[p] || []).map(function(pr) { return pr.id; });
+      console.log('🔄 V53 修复: ' + p + ' 平台 previewSynced 有 ' + mismatchCount + ' 个旧ID不匹配，已重建为当前 ' + state.previewSynced[p].length + ' 个产品ID');
     }
   });
 }
