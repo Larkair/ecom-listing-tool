@@ -1177,7 +1177,7 @@ const MAX_IMG_PER_GROUP = 9;
 // =============================================
 // Supabase 初始化（容错：CDN 加载失败不影响核心功能）
 // =============================================
-console.log('🛠 批量上架工具 V51 | 2026-06-16 | 分步初始化容错 | 模板持久化增强 | 损坏数据自动修复');
+console.log('🛠 批量上架工具 V52 | 2026-06-17 | DB修复template_library_id列 | 方案云端存储PGRST204自动重试 | 跨浏览器共享修复');
 // =============================================
 const SUPABASE_URL = 'https://khrppyhcjzkkokyhnhhd.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtocnBweWhjanpra29reWhuaGhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwNzY1NDEsImV4cCI6MjA5NjY1MjU0MX0.uS9YablBNwjUmQlwRbLRw3SEPNgEnO1Uc6Poe1SeB88';
@@ -2994,11 +2994,44 @@ async function saveAsScheme() {
 
   console.log('📋 保存方案:', name, '| Storage路径:', storagePath, '| 上传状态:', uploadOk);
 
-  // DB insert（轻量 payload，不含大文件）
+  // V52: DB insert — 增加自动列剥离重试机制
+  // 已知列白名单（防止代码写入 DB 不存在的列导致 PGRST204 错误）
+  var knownColumns = ['platform','scheme_name','template_filename','template_library_id',
+    'template_headers','template_data','template_rawdata','template_storage_path',
+    'template_meta','field_configs'];
+
+  var dbInsertOk = false;
+  var dbScheme = null;
   try {
+    // 第一次尝试：完整 payload
     const { data, error } = await sb.from('ecom_config_schemes').insert(scheme).select('id').single();
-    if (error) throw error;
-    scheme.id = data.id;
+    if (error) {
+      // PGRST204 = 未知列 → 自动剥离非白名单列后重试
+      if (error.code === 'PGRST204' || (error.message && error.message.includes('Could not find'))) {
+        console.warn('📋 DB 无此列，自动剥离后重试:', error.message);
+        var strippedScheme = {};
+        knownColumns.forEach(function(col) {
+          if (scheme[col] !== undefined) strippedScheme[col] = scheme[col];
+        });
+        const { data: retryData, error: retryErr } = await sb.from('ecom_config_schemes').insert(strippedScheme).select('id').single();
+        if (retryErr) throw retryErr;
+        dbScheme = retryData;
+        dbInsertOk = true;
+        console.log('📋 列剥离重试成功');
+      } else {
+        throw error;
+      }
+    } else {
+      dbScheme = data;
+      dbInsertOk = true;
+    }
+  } catch(e) {
+    console.error('📋 Save scheme DB insert 失败:', e.code, e.message || e);
+    showToast('⚠️ 方案云端保存失败: ' + (e.message || e.code || '未知错误'), 'warn', 6000);
+  }
+
+  if (dbInsertOk && dbScheme) {
+    scheme.id = dbScheme.id;
     scheme.created_at = new Date().toISOString();
     scheme.updated_at = new Date().toISOString();
     // 保留内存中的 template_rawdata 用于当前会话
@@ -3020,16 +3053,15 @@ async function saveAsScheme() {
       });
       safeSetLS('ecom_schemes_fallback', JSON.stringify(localSchemes));
     } catch(lsErr) {}
-    showToast('方案「' + name + '」已保存到云端' + (uploadOk ? '' : '（模板文件未上传，其他同事加载时需重新导入模板）'), uploadOk ? 'success' : 'warn');
-  } catch(e) {
-    console.error('Save scheme DB insert error:', e);
-    // DB 完全失败 → 降级 localStorage
+    showToast('✅ 方案「' + name + '」已保存到云端' + (uploadOk ? '' : '（模板文件未上传，其他设备加载时需重新导入模板）'), uploadOk ? 'success' : 'warn');
+  } else {
+    // DB 完全失败 → 降级 localStorage（明确告知用户）
     if (!state.configSchemes[platform]) state.configSchemes[platform] = [];
     scheme.id = Date.now();
     scheme.created_at = new Date().toISOString();
     scheme.updated_at = new Date().toISOString();
     if (rawBuf) {
-      try { scheme.template_rawdata = arrayBufferToBase64(rawBuf); } catch(e) {}
+      try { scheme.template_rawdata = arrayBufferToBase64(rawBuf); } catch(e2) {}
     }
     state.configSchemes[platform].push(scheme);
     state.currentSchemeName[platform] = name;
@@ -3044,7 +3076,7 @@ async function saveAsScheme() {
       });
       safeSetLS('ecom_schemes_fallback', JSON.stringify(localSchemes));
     } catch(lsErr) {}
-    showToast('方案「' + name + '」仅本地保存（数据库写入失败，其他同事无法查看）', 'warn');
+    showToast('⚠️ 方案「' + name + '」仅本地保存（换浏览器/电脑将不可见）', 'warn', 8000);
   }
 }
 
