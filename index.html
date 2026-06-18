@@ -2875,7 +2875,7 @@ function renderFieldExtra(f, i) {
     return `
       <div class="tag-input-wrap" onclick="focusTagInput(${i})">
         ${(f.options||[]).map(opt => `<span class="tag">${escHtml(opt)}<span class="rm" onclick="event.stopPropagation();removeTag(${i},'${escHtml(opt).replace(/'/g,"\\'")}')">×</span></span>`).join('')}
-        <input class="tag-input" id="tagInput_${i}" placeholder="输入后回车添加选项…" onkeydown="onTagKeydown(event,${i})" />
+        <input class="tag-input" id="tagInput_${i}" placeholder="输入选项，支持顿号/逗号/分号批量添加（如：红色、蓝色、绿色）" onkeydown="onTagKeydown(event,${i})" />
       </div>`;
   } else if (f.mode === 'custom') {
     return `<span class="mode-badge mode-custom">用户自由填写</span>`;
@@ -2942,7 +2942,13 @@ function onTagKeydown(e, idx) {
     const val = e.target.value.trim();
     if (val) {
       const opts = state.fieldConfigs[state.platform][idx].options;
-      if (!opts.includes(val)) opts.push(val);
+      // V54: 支持"顿号/逗号/分号/斜杠"分隔批量添加选项
+      // 输入 "红色、蓝色、绿色" → 添加3个选项
+      const separators = /[,、；;\/|]/;
+      const items = val.split(separators).map(s => s.trim()).filter(s => s.length > 0);
+      items.forEach(function(item) {
+        if (!opts.includes(item)) opts.push(item);
+      });
       document.getElementById('fextra_' + idx).innerHTML = renderFieldExtra(state.fieldConfigs[state.platform][idx], idx);
       focusTagInput(idx);
     }
